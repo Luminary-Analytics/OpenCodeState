@@ -1,0 +1,66 @@
+{
+  "id": "pkg_auth_fix",
+  "session_id": "ses_01HXYZ8M4A",
+  "repository_id": "repo_demo",
+  "created_at": "2026-06-06T11:48:30Z",
+  "immutable": true,
+  "intent": {
+    "declared": null,
+    "inferred": "Fix auth token refresh race condition",
+    "summary": "Refresh tokens were dropped when two requests refreshed concurrently. Serialize refresh and add a regression test."
+  },
+  "change_units": [
+    {
+      "id": "cu_auth_fix",
+      "title": "Fix auth token refresh race",
+      "intent": "Serialize concurrent token refresh",
+      "kind": "fix",
+      "confidence": 0.91,
+      "paths": ["src/auth/token.ts", "src/auth/token.test.ts"],
+      "depends_on": [],
+      "risk_signals": [
+        { "kind": "pr-risk", "severity": "warn", "rationale": "touches auth path", "introduced": true }
+      ]
+    }
+  ],
+  "content_changes": [
+    { "path": "src/auth/token.ts", "status": "modified", "before_oid": "a1b2c3", "after_oid": "d4e5f6" },
+    { "path": "src/auth/token.test.ts", "status": "added", "before_oid": null, "after_oid": "99aa88" }
+  ],
+  "provenance": [
+    { "actor": "human:rich", "contribution": "edit", "accepted": true },
+    { "actor": "ai:claude-code", "contribution": "generated", "accepted": true, "prompt_ref": "prv_unit_test_01", "note": "regression test draft" }
+  ],
+  "validation": [
+    {
+      "type": "tests",
+      "status": "passed",
+      "evidence_ref": "val_tests_01",
+      "provider": { "id": "npm", "version": "11.x" }
+    },
+    {
+      "type": "audit",
+      "format": "sarif",
+      "status": "passed",
+      "evidence_ref": "val_audit_01",
+      "provider": { "id": "fallow", "version": "2.89.0" },
+      "analyzed_oid": "tree_d4e5f6",
+      "results": [
+        { "rule_id": "fallow/circular-dependency", "level": "none", "count": 0 }
+      ]
+    }
+  ],
+  "risk_signals": [
+    { "kind": "complexity", "severity": "note", "target": "src/auth/token.ts:refresh", "score": 7, "introduced": false }
+  ],
+  "attribution": {
+    "gate": "new-only",
+    "dead_code_introduced": 0,
+    "complexity_introduced": 0,
+    "duplication_introduced": 0
+  },
+  "policy_status": "ok",
+  "integration_status": "unintegrated",
+  "review_notes": [],
+  "rollback": { "strategy": "restore_checkpoint", "checkpoint_ref": "ckpt_004" }
+}

@@ -22,6 +22,16 @@ Success criteria:
 - The core vocabulary is clear enough to debate and improve.
 - The MVP is scoped tightly enough to build.
 
+### Milestone 0 status (2026-06-06)
+
+Drafted: README, manifesto, core primitives (RFC 0002), MVP architecture
+(RFC 0003), change-grouping design (RFC 0004), codebase-intelligence providers
+(RFC 0005), and specs for sessions, checkpoints, packages, and storage. Example
+session and package objects live in `examples/`; the planned implementation
+layout is in `reference/`; `ARCHITECTURE.md` ties the design together. Still
+open: provenance, policy, and sync specs, and the implementation backlog beyond
+the RFC 0003 phases.
+
 ## Milestone 1: Local Prototype
 
 Purpose: prove the core workflow locally.

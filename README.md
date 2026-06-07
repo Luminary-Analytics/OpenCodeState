@@ -70,6 +70,26 @@ examples/   Example sessions, packages, and workflows
 reference/  Future reference implementation components
 ```
 
+## Design Documents
+
+Start with [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
+Architecture and rationale live in `rfcs/`; the object model lives in `specs/`.
+
+RFCs:
+
+- [0001 — Vision](rfcs/0001-opencodestate-vision.md)
+- [0002 — Core Primitives](rfcs/0002-core-primitives.md)
+- [0003 — MVP](rfcs/0003-mvp.md) — the daemonless vertical slice and hybrid implementation
+- [0004 — Change Grouping](rfcs/0004-change-grouping.md) — the Tier-0 heuristic pipeline
+- [0005 — Codebase Intelligence Providers](rfcs/0005-codebase-intelligence-providers.md) — the provider interface and the `fallow` adapter
+
+Specs:
+
+- [ocs-core](specs/ocs-core.md), [ocs-events](specs/ocs-events.md), [ocs-sessions](specs/ocs-sessions.md)
+- [ocs-checkpoints](specs/ocs-checkpoints.md), [ocs-packages](specs/ocs-packages.md), [ocs-storage](specs/ocs-storage.md)
+
+See [examples/](examples/) for concrete session and package objects.
+
 ## License
 
 OpenCodeState is licensed under the Apache License 2.0.

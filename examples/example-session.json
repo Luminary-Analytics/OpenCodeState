@@ -1,0 +1,27 @@
+{
+  "session_id": "ses_01HXYZ8M4A",
+  "repository_id": "repo_demo",
+  "workspace_id": "ws_rich_laptop",
+  "actor_id": "human:rich",
+  "state": "packaged",
+  "start_time": "2026-06-06T09:02:11Z",
+  "finish_time": "2026-06-06T11:48:30Z",
+  "declared_intent": null,
+  "inferred_intent": "Fix auth token refresh; bump dependency; update README.",
+  "changed_paths": [
+    "src/auth/token.ts",
+    "src/auth/token.test.ts",
+    "package.json",
+    "package-lock.json",
+    "README.md"
+  ],
+  "checkpoints": [
+    { "checkpoint_id": "ckpt_001", "trigger": "save", "actor_id": "human:rich", "timestamp": "2026-06-06T09:14:02Z" },
+    { "checkpoint_id": "ckpt_002", "trigger": "command", "actor_id": "human:rich", "timestamp": "2026-06-06T09:51:40Z", "note": "ocs run npm test" },
+    { "checkpoint_id": "ckpt_003", "trigger": "agent", "actor_id": "ai:claude-code", "timestamp": "2026-06-06T10:33:18Z" },
+    { "checkpoint_id": "ckpt_004", "trigger": "explicit", "actor_id": "human:rich", "timestamp": "2026-06-06T11:40:05Z" }
+  ],
+  "events": ["evt_0001", "evt_0002", "evt_0003", "evt_0004", "evt_0005"],
+  "validation_records": ["val_tests_01", "val_audit_01"],
+  "generated_packages": ["pkg_auth_fix", "pkg_dep_bump", "pkg_docs"]
+}
