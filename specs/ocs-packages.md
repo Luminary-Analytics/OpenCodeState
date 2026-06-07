@@ -36,7 +36,7 @@ A change unit is a logical group of related changes (see
 
 - Change Unit ID
 - Title and intent
-- Member paths
+- Member hunks (path + line ranges); whole-file membership is the common case
 - Grouping `confidence`
 - `kind` (`feature`, `fix`, `reformat`, `reorg`, `deps`, `generated`, …)
 - `depends_on` (other units it derives from, e.g. a lockfile unit depending on a dependency-bump unit)

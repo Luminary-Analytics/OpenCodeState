@@ -100,6 +100,34 @@ consistent with the north star.
   re-ranks and subdivides its output, so the system always degrades gracefully
   to the heuristic spine.
 
+## Hunk-level splitting and verification (Tier-1)
+
+Tier-1 may subdivide a file's changes into separate units at **hunk**
+granularity. A change unit's membership is therefore a set of hunks (path + line
+ranges); whole-file membership is the common Tier-0 case.
+
+Sub-file splitting is only safe under conditions established empirically:
+
+- **L0 — coupling precondition (cheap, deterministic):** hunks that share a
+  defined or mutated symbol, or that have data flow between them, are not split.
+  This alone catches the common cross-cutting rename (both sides reference the
+  same symbol) and most obvious entanglement, before any build runs.
+- **Verification of the survivors:** a proposed sub-file split is trusted only if
+  each unit is **materialized as its own tree and analyzed** — type-checked
+  (e.g. `tsc`), then tested where mapped tests exist. A provider's line-scoping
+  flag (`fallow --diff-stdin`) scopes *attribution*, not correctness, and cannot
+  verify a split; see [RFC 0005](0005-codebase-intelligence-providers.md).
+
+If a split cannot be verified — no type checker, no covering tests, or the units
+form a dependency cycle — the conservative rule applies: **do not sub-split; keep
+the file whole.** Sub-file splitting is thus opt-in, verified, and always
+reversible to the file-granularity floor. Export order follows unit dependencies
+(see [ocs-storage](../specs/ocs-storage.md)).
+
+Residual risk: hunks that compile apart but are behaviorally coupled (ordering,
+units, shared state) with no covering test are caught only by human review — the
+judgment gate remains load-bearing for that residue.
+
 ## Open questions
 
 - What is the right default community-detection threshold, and how is confidence calibrated?

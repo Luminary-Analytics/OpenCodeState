@@ -93,7 +93,12 @@ Key facts that shape the integration:
   only when the session **introduced** error-level issues; stay silent on
   inherited debt.
 - **`--diff-stdin`** scopes findings to exact changed lines, enabling
-  **per-change-unit** analysis, not just per-session.
+  **per-change-unit** attribution — not just per-session. It scopes *attribution*,
+  not correctness: it filters findings on the real tree and does not evaluate a
+  counterfactual "only this unit applied" tree, so it cannot by itself verify that
+  a sub-file split is self-consistent. Verifying a split requires materializing
+  the unit's tree and type-checking it (`fallow` is not a type checker); see
+  [RFC 0004](0004-change-grouping.md).
 - **`--save-baseline` / `--fail-on-regression --tolerance`** provide a native
   regression gate.
 - Exit codes: `0` clean, `1` issues found (normal — not a tool failure), `2`

@@ -53,7 +53,10 @@ Because content objects already live in the repository's object database,
 already present — effectively instant. The default mapping is **one commit per
 change unit**, preserving logical grouping, with the package summary embedded in
 commit messages and the full package object stored in Git notes or under
-`.ocs/packages/`. Import (round-trip) is a later milestone.
+`.ocs/packages/`. A unit that owns only part of a file is applied as a partial set
+of hunks; commits are emitted in unit-dependency (topological) order, and a
+dependency cycle between units means they cannot be cleanly separated and are
+coalesced into one. Import (round-trip) is a later milestone.
 
 ## Future: standalone backend
 
