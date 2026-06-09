@@ -1,0 +1,17 @@
+{
+  "name": "ocs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenCodeState v1 reference CLI (slice 1 walking skeleton)",
+  "type": "module",
+  "bin": {
+    "ocs": "src/ocs.ts"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "ocs": "node src/ocs.ts",
+    "acceptance": "bash test/acceptance.sh"
+  }
+}
