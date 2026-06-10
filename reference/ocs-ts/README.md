@@ -1,9 +1,11 @@
-# ocs (TypeScript reference — v1 slice 1)
+# ocs (TypeScript reference — v1)
 
-The first OpenCodeState reference implementation: a **daemonless walking
-skeleton** that proves the loop `init → start → checkpoint → finish → export`
-end-to-end, with no grouping and no provider (those arrive in slices 2 and 3).
-See [RFC 0003](../../rfcs/0003-mvp.md) and the v1 build contract.
+The first OpenCodeState reference implementation: a **daemonless** CLI that
+proves the loop `init → start → checkpoint → finish → export` end-to-end
+(slice 1) and splits a session into logical change units with deterministic
+Tier-0 heuristics (slice 2). No AI, no provider yet — the `fallow` provider
+arrives in slice 3. See [RFC 0003](../../rfcs/0003-mvp.md) and
+[RFC 0004](../../rfcs/0004-change-grouping.md).
 
 ## Run
 
@@ -17,9 +19,30 @@ node src/ocs.ts start --intent "fix the thing"
 node src/ocs.ts checkpoint --label "wip"
 node src/ocs.ts status
 node src/ocs.ts restore 1        # roll the working tree back to checkpoint #1
-node src/ocs.ts finish           # emit one whole-session package
-node src/ocs.ts export --branch ocs/demo
+node src/ocs.ts finish --dry-run # preview the change-unit plan without packaging
+node src/ocs.ts finish           # group changes into units and emit a package
+node src/ocs.ts export --branch ocs/demo   # one commit per change unit
 ```
+
+## Grouping (slice 2)
+
+`ocs finish` runs the Tier-0 pipeline from
+[RFC 0004](../../rfcs/0004-change-grouping.md) — deterministic and offline:
+
+- **Classify/normalize pre-pass:** rename detection; whitespace-only changes
+  bucket into a `reformat` unit; lockfiles attach to their manifest's unit;
+  generated files attach to their nearest cause; changes matching commits made
+  mid-session (pull/merge) are subtracted.
+- **Five signals** weight file pairs: path proximity, import edges (regex over
+  ts/js), historical co-change, checkpoint-window temporal proximity, and
+  diff-similarity (so cross-cutting edits stay together).
+- **Clustering** is connected components over a weight threshold, with a crude
+  confidence score; low confidence falls back to a single unit instead of
+  guessing — uncertainty interrupts, it never guesses silently.
+
+`ocs export` writes **one commit per change unit** (plus a labeled pre-session
+commit if the tree was dirty at `ocs start`); the final exported tree always
+equals the working tree at finish.
 
 ## How it stores state
 
@@ -44,6 +67,5 @@ Runs the scripted scenario from the build contract against a throwaway copy of
 
 ## Status
 
-Slice 1 of the MVP. Deferred: Tier-0 grouping (slice 2), the fallow provider
-(slice 3), the watcher daemon, Tier-1 hunk-splitting, and the eventual Rust port
-of the hot paths.
+Slices 1–2 of the MVP. Deferred: the fallow provider (slice 3), the watcher
+daemon, Tier-1 hunk-splitting, and the eventual Rust port of the hot paths.

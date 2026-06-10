@@ -1,7 +1,9 @@
 # Reference Implementation
 
-This directory will hold the first OpenCodeState reference implementation. It is
-a planning skeleton today — no code yet. The architecture is specified in
+This directory holds the first OpenCodeState reference implementation:
+[`ocs-ts/`](ocs-ts/) is the TypeScript walking skeleton (slice 1: the daemonless
+loop; slice 2: Tier-0 change grouping). The Rust core port comes later. The
+architecture is specified in
 [RFC 0003 (MVP)](../rfcs/0003-mvp.md) and
 [RFC 0005 (Codebase Intelligence Providers)](../rfcs/0005-codebase-intelligence-providers.md).
 
@@ -37,8 +39,13 @@ This surface is itself a TS/JS codebase, so it is analyzed and gated by
 `npx fallow` in CI, and OpenCodeState can ultimately manage it with `fallow` as
 the provider — dogfooding the product.
 
-## First milestone
+## Status
 
-The daemonless vertical slice defined in [RFC 0003](../rfcs/0003-mvp.md):
-`ocs init / start / checkpoint / finish / restore / export`, Tier-0 grouping,
-`fallow`-sourced validation and risk, and Git export.
+- **Slice 1 (done):** the daemonless loop — `ocs init / start / checkpoint /
+  restore / finish / export` in [`ocs-ts/`](ocs-ts/).
+- **Slice 2 (done):** Tier-0 change grouping — `ocs finish` splits a session
+  into change units per [RFC 0004](../rfcs/0004-change-grouping.md) and
+  `ocs export` writes one commit per unit.
+- **Slice 3 (next):** the `fallow` codebase-intelligence provider
+  ([RFC 0005](../rfcs/0005-codebase-intelligence-providers.md)) — SARIF
+  validation, risk, and introduced-vs-inherited attribution on packages.

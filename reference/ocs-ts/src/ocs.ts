@@ -12,8 +12,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 
+import { groupChanges, type Change } from "./grouping.ts";
+
 type Trigger = "explicit" | "command" | "save" | "agent" | "pre-restore";
-type Status = "added" | "modified" | "deleted";
 
 interface Checkpoint {
   n: number;
@@ -39,13 +40,6 @@ interface Session {
   checkpoints: Checkpoint[];
   finishTree: string | null;
   packages: string[];
-}
-
-interface Change {
-  path: string;
-  status: Status;
-  before_oid: string | null;
-  after_oid: string | null;
 }
 
 interface State {
@@ -128,24 +122,60 @@ function isZero(sha: string): boolean {
   return /^0+$/.test(sha);
 }
 
-// Net change between two trees, parsed from `git diff --raw`.
+// Net change between two trees, parsed from `git diff --raw` (rename-aware).
 function diffTrees(a: string, b: string): Change[] {
-  const out = tryGit(["diff", "--raw", "--no-renames", a, b]);
+  const out = tryGit(["diff", "--raw", "--no-abbrev", "-M", a, b]);
   if (!out) return [];
   const changes: Change[] = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith(":")) continue;
-    const [meta, file] = line.split("\t");
-    const f = meta.replace(/^:/, "").split(/\s+/); // srcMode dstMode srcSha dstSha STATUS
+    const parts = line.split("\t");
+    const f = parts[0].replace(/^:/, "").split(/\s+/); // srcMode dstMode srcSha dstSha STATUS
     const st = f[4][0];
-    changes.push({
-      path: file,
-      status: st === "A" ? "added" : st === "D" ? "deleted" : "modified",
-      before_oid: isZero(f[2]) ? null : f[2],
-      after_oid: isZero(f[3]) ? null : f[3],
-    });
+    const mode = f[1] === "000000" ? f[0] : f[1];
+    const before = isZero(f[2]) ? null : f[2];
+    const after = isZero(f[3]) ? null : f[3];
+    if (st === "R") {
+      changes.push({ path: parts[2], status: "renamed", renamed_from: parts[1], before_oid: before, after_oid: after, mode });
+    } else if (st === "C") {
+      changes.push({ path: parts[2], status: "added", before_oid: null, after_oid: after, mode });
+    } else {
+      changes.push({
+        path: parts[1],
+        status: st === "A" ? "added" : st === "D" ? "deleted" : "modified",
+        before_oid: before,
+        after_oid: after,
+        mode,
+      });
+    }
   }
   return changes;
+}
+
+// File lists of recent commits, for the historical co-change signal.
+function readHistoryCommits(): string[][] {
+  const raw = tryGit(["log", "-n", "200", "--name-only", "--format=%x00%H"]);
+  if (!raw) return [];
+  return raw
+    .split("\0")
+    .map((block) => block.split("\n").slice(1).map((l) => l.trim()).filter(Boolean))
+    .filter((files) => files.length > 0);
+}
+
+// Normalized changed lines of one file between two trees (diff-similarity signal).
+function changedLinesFor(a: string, b: string, p: string): string[] {
+  const out = tryGit(["diff", a, b, "--", p]);
+  if (!out) return [];
+  const lines: string[] = [];
+  for (const l of out.split("\n")) {
+    if (l.startsWith("+++") || l.startsWith("---")) continue;
+    if (l[0] === "+" || l[0] === "-") {
+      const t = l.slice(1).trim();
+      if (t) lines.push(t);
+      if (lines.length >= 500) break;
+    }
+  }
+  return lines;
 }
 
 // ---------- session helpers ----------
@@ -277,27 +307,86 @@ function cmdRestore(which: string): void {
   console.log(`Restored working tree to checkpoint #${cp.n} (${short(cp.commit)}). Prior state saved as a checkpoint.`);
 }
 
-function cmdFinish(): void {
+function cmdFinish(dryRun: boolean): void {
   const s = loadState();
   const sess = requireActive(s);
   const finishTree = snapshotWorkingTree();
-  const changes = diffTrees(sess.baselineTree, finishTree);
+  let changes = diffTrees(sess.baselineTree, finishTree);
+  const notes: string[] = [];
+
+  // If HEAD moved during the session (pull, merge, or the user's own commits),
+  // drop changes whose resulting blob matches what those commits introduced:
+  // they are recorded in git history, not this session's packaged work.
+  const headNow = tryGit(["rev-parse", "HEAD"]);
+  if (sess.headAtStart && headNow && headNow !== sess.headAtStart) {
+    const startTree = git(["rev-parse", `${sess.headAtStart}^{tree}`]);
+    const nowTree = git(["rev-parse", `${headNow}^{tree}`]);
+    const upstream = new Map(diffTrees(startTree, nowTree).map((c) => [c.path, c.after_oid ?? "deleted"]));
+    const before = changes.length;
+    changes = changes.filter((c) => upstream.get(c.path) !== (c.after_oid ?? "deleted"));
+    if (changes.length < before)
+      notes.push(`subtracted ${before - changes.length} change(s) matching commits made during the session`);
+  }
+
+  const byPath = new Map(changes.map((c) => [c.path, c] as const));
+  const trees = [sess.baselineTree, ...sess.checkpoints.map((c) => c.tree), finishTree];
+  const windows: string[][] = [];
+  for (let i = 1; i < trees.length; i++) {
+    if (trees[i] === trees[i - 1]) continue;
+    const w = diffTrees(trees[i - 1], trees[i]).map((c) => c.path).filter((p) => byPath.has(p));
+    if (w.length) windows.push(w);
+  }
+
+  const result = groupChanges({
+    changes,
+    checkpointWindows: windows,
+    historyCommits: readHistoryCommits(),
+    adapters: {
+      readBlob: (p) => {
+        const c = byPath.get(p);
+        const oid = c?.after_oid ?? c?.before_oid;
+        return oid ? tryGit(["cat-file", "blob", oid]) : null;
+      },
+      changedLines: (p) => changedLinesFor(sess.baselineTree, finishTree, p),
+      whitespaceOnly: (p) => tryGit(["diff", "-w", sess.baselineTree, finishTree, "--", p]) === "",
+    },
+  });
+  notes.push(...result.notes);
+
+  const units = result.units.map((u) => ({
+    id: id("cu"),
+    title: u.title,
+    kind: u.kind,
+    confidence: result.confidence,
+    paths: u.paths,
+    depends_on: [] as string[],
+    notes: u.notes,
+  }));
+
+  const planLines = [
+    `  ${units.length} change unit(s), grouping confidence ${result.confidence}${result.fallback ? " (fallback: merged)" : ""}:`,
+    ...units.map((u) => `    [${u.kind}] ${u.title} — ${u.paths.join(", ")}`),
+    ...notes.map((n) => `  note: ${n}`),
+  ];
+  if (dryRun) {
+    console.log(`DRY RUN — finish plan for ${sess.id}`);
+    if (!changes.length) console.log("  no changes since baseline");
+    else for (const l of planLines) console.log(l);
+    return;
+  }
+
   const pid = id("pkg");
   const last = sess.checkpoints[sess.checkpoints.length - 1];
   const pkg = {
     id: pid,
     session_id: sess.id,
     created_at: nowISO(),
-    intent: { declared: sess.intent, inferred: null, summary: sess.intent ?? "Session changes" },
-    change_units: [
-      {
-        id: id("cu"),
-        title: sess.intent ?? "Session changes",
-        kind: "session",
-        confidence: 1,
-        paths: changes.map((c) => c.path),
-      },
-    ],
+    intent: {
+      declared: sess.intent,
+      inferred: null,
+      summary: sess.intent ?? (units.length ? units.map((u) => u.title).join("; ") : "Session changes"),
+    },
+    change_units: units,
     content_changes: changes,
     provenance: [{ actor: "human", contribution: "edit", accepted: true }],
     rollback: { strategy: "restore_checkpoint", checkpoint_ref: last ? last.ref : sess.baselineRef },
@@ -312,8 +401,8 @@ function cmdFinish(): void {
   s.activeSession = null;
   saveState(s);
   console.log(`Finished ${sess.id} → package ${pid}`);
-  console.log(`  ${changes.length} file(s) in 1 change unit:`);
-  for (const c of changes) console.log(`    ${c.status[0].toUpperCase()}  ${c.path}`);
+  if (!changes.length) console.log("  no changes since baseline (empty package)");
+  else for (const l of planLines) console.log(l);
   console.log(`  package: .ocs/packages/${pid}.json`);
 }
 
@@ -324,16 +413,51 @@ function cmdExport(branch: string | null): void {
     .sort((a, b) => (a.finishTime! < b.finishTime! ? 1 : -1))[0];
   if (!sess) throw new Error("no packaged session to export — run `ocs finish` first");
   const pid = sess.packages[sess.packages.length - 1];
-  const pkg = s.packages[pid] as { intent: { summary: string }; content_changes: unknown[] };
+  const pkg = s.packages[pid] as {
+    tree: string;
+    change_units: { id: string; title: string; paths: string[] }[];
+    content_changes: Change[];
+  };
   const br = branch ?? `ocs/${sess.id}`;
   const head = tryGit(["rev-parse", "HEAD"]);
-  const summary =
-    `${pkg.intent.summary}\n\n` +
-    `ocs-package: ${pid}\nsession: ${sess.id}\nfiles: ${pkg.content_changes.length}`;
-  const commit = mkCommit(sess.finishTree!, head, summary);
-  git(["update-ref", `refs/heads/${br}`, commit]);
-  console.log(`Exported package ${pid} → branch ${br} (${short(commit)})`);
-  console.log(`  tree ${short(sess.finishTree!)} == working tree at finish`);
+  const byPath = new Map(pkg.content_changes.map((c) => [c.path, c] as const));
+
+  // One commit per change unit, built from the baseline tree by applying each
+  // unit's file changes in order. The final tree must equal the finish tree.
+  const idx = path.join(ocsDir(), "tmp-index");
+  fs.rmSync(idx, { force: true });
+  git(["read-tree", sess.baselineTree], idx);
+  let parent = head;
+  let lastTree = sess.baselineTree;
+  let commits = 0;
+
+  // If the tree was dirty at `ocs start`, that pre-session state is not the
+  // session's work and must not be attributed to a change unit — carry it in
+  // an explicitly labeled commit instead of letting it ride silently.
+  const headTree = head ? git(["rev-parse", `${head}^{tree}`]) : null;
+  if (headTree !== null && headTree !== sess.baselineTree) {
+    parent = mkCommit(sess.baselineTree, parent, `Pre-session working tree state\n\nocs-package: ${pid}\nsession: ${sess.id}`);
+    console.log("  note: tree was dirty at session start — emitted a labeled pre-session commit");
+  }
+  for (const u of pkg.change_units) {
+    for (const p of u.paths) {
+      const c = byPath.get(p);
+      if (!c) continue;
+      if (c.renamed_from) git(["update-index", "--force-remove", "--", c.renamed_from], idx);
+      if (c.status === "deleted") git(["update-index", "--force-remove", "--", p], idx);
+      else git(["update-index", "--add", "--cacheinfo", `${c.mode},${c.after_oid},${p}`], idx);
+    }
+    const tree = git(["write-tree"], idx);
+    if (tree === lastTree) continue;
+    parent = mkCommit(tree, parent, `${u.title}\n\nocs-package: ${pid}\nocs-unit: ${u.id}\nsession: ${sess.id}`);
+    lastTree = tree;
+    commits++;
+  }
+  fs.rmSync(idx, { force: true });
+  if (commits === 0) throw new Error("nothing to export — package has no changes");
+  if (lastTree !== pkg.tree) console.error("warning: exported tree differs from the finish tree");
+  git(["update-ref", `refs/heads/${br}`, parent!]);
+  console.log(`Exported package ${pid} → branch ${br} (${commits} commit(s), head ${short(parent!)})`);
 }
 
 // ---------- cli ----------
@@ -371,7 +495,7 @@ function main(): void {
     case "status": cmdStatus(); break;
     case "log": cmdLog(); break;
     case "restore": cmdRestore(_[0] ?? ""); break;
-    case "finish": cmdFinish(); break;
+    case "finish": cmdFinish(flags["dry-run"] === true); break;
     case "export": cmdExport((flags.branch as string) ?? null); break;
     default:
       console.log("usage: ocs <init|start|checkpoint|status|log|restore|finish|export>");
