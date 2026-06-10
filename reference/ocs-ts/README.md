@@ -2,10 +2,11 @@
 
 The first OpenCodeState reference implementation: a **daemonless** CLI that
 proves the loop `init → start → checkpoint → finish → export` end-to-end
-(slice 1) and splits a session into logical change units with deterministic
-Tier-0 heuristics (slice 2). No AI, no provider yet — the `fallow` provider
-arrives in slice 3. See [RFC 0003](../../rfcs/0003-mvp.md) and
-[RFC 0004](../../rfcs/0004-change-grouping.md).
+(slice 1), splits a session into logical change units with deterministic
+Tier-0 heuristics (slice 2), and attaches codebase-intelligence evidence from
+`fallow` to every package (slice 3). No AI in the loop. See
+[RFC 0003](../../rfcs/0003-mvp.md), [RFC 0004](../../rfcs/0004-change-grouping.md),
+and [RFC 0005](../../rfcs/0005-codebase-intelligence-providers.md).
 
 ## Run
 
@@ -44,6 +45,29 @@ node src/ocs.ts export --branch ocs/demo   # one commit per change unit
 commit if the tree was dirty at `ocs start`); the final exported tree always
 equals the working tree at finish.
 
+## Provider evidence (slice 3)
+
+At a real (non-dry) `ocs finish` on a repo with ts/js changes, the `fallow`
+adapter ([RFC 0005](../../rfcs/0005-codebase-intelligence-providers.md)) runs
+`fallow audit --changed-since <session-baseline>` against the working tree and
+attaches to the package:
+
+- `validation[]` — a SARIF-backed record (rule counts + per-finding locations),
+  wrapped in analysis provenance (provider id + version, analyzed tree OID,
+  scope, timestamp) so every datum is reproducible and attributable.
+- `attribution` — issues **introduced** by this session vs **inherited** from
+  touched files (fallow's `new-only` gate). This is the package-native form of
+  the finish rule: only introduced issues would ever interrupt; inherited debt
+  never blocks.
+- `risk_signals[]` — package-level signals (dead-code/complexity/duplication
+  introduced; inherited-debt as a note), plus a per-unit `risk` field derived
+  from finding locations.
+
+Degradation is normal and explicit: `OCS_PROVIDER=none` disables the provider,
+non-ts/js sessions get a "no evidence" note, provider errors produce an
+`error`-status validation record — `finish` never breaks for lack of analysis.
+Checkpoints never invoke the provider (hot path stays cheap).
+
 ## How it stores state
 
 - Content is snapshotted into the repo's own git object database via plumbing
@@ -67,5 +91,6 @@ Runs the scripted scenario from the build contract against a throwaway copy of
 
 ## Status
 
-Slices 1–2 of the MVP. Deferred: the fallow provider (slice 3), the watcher
-daemon, Tier-1 hunk-splitting, and the eventual Rust port of the hot paths.
+Slices 1–3 of the MVP. Deferred: the policy-driven judgment interrupt (today
+`finish` only previews it), the watcher daemon, agent-hook provenance (MCP),
+Tier-1 hunk-splitting, and the eventual Rust port of the hot paths.

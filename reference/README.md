@@ -46,6 +46,10 @@ the provider — dogfooding the product.
 - **Slice 2 (done):** Tier-0 change grouping — `ocs finish` splits a session
   into change units per [RFC 0004](../rfcs/0004-change-grouping.md) and
   `ocs export` writes one commit per unit.
-- **Slice 3 (next):** the `fallow` codebase-intelligence provider
-  ([RFC 0005](../rfcs/0005-codebase-intelligence-providers.md)) — SARIF
-  validation, risk, and introduced-vs-inherited attribution on packages.
+- **Slice 3 (done):** the `fallow` codebase-intelligence provider
+  ([RFC 0005](../rfcs/0005-codebase-intelligence-providers.md)) — packages now
+  carry SARIF validation records, risk signals, per-unit risk, and
+  introduced-vs-inherited attribution, all wrapped in analysis provenance.
+- **Next:** the policy-driven judgment interrupt at finish, hook-fired agent
+  provenance (`ocs checkpoint --actor ai:<name>` via MCP / Claude Code hooks),
+  and the watcher daemon (Phase 2 of RFC 0003).

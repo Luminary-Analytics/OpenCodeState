@@ -31,10 +31,14 @@ worktree_oid() { # tree oid of the current working tree (throwaway index)
 
 W1="$(mktemp -d)"
 W2="$(mktemp -d)"
-trap 'rm -rf "$W1" "$W2"' EXIT
+W3="$(mktemp -d)"
+trap 'rm -rf "$W1" "$W2" "$W3"' EXIT
 
 ###############################################################################
 echo "================ scenario 1: the loop ================"
+# Scenarios 1-2 run provider-less (hermetic/offline) — which also exercises the
+# degrade path: no provider, package carries no analysis evidence.
+export OCS_PROVIDER=none
 new_repo "$W1"
 
 echo "== init ==";  ocs init
@@ -72,6 +76,7 @@ node -e '
     if (!paths.includes(want)) { console.error("MISSING " + want); process.exit(1); }
   }
   if (p.change_units.length !== 1) { console.error("expected 1 change unit, got " + p.change_units.length); process.exit(1); }
+  if (p.validation.length !== 0) { console.error("expected no validation with OCS_PROVIDER=none"); process.exit(1); }
 ' "$PKG"
 echo "PASS: package captured the session net changes in 1 change unit"
 
@@ -174,6 +179,62 @@ done
 WT2="$(worktree_oid)"
 [ "$WT2" = "$(git rev-parse 'refs/heads/ocs/multi^{tree}')" ] || fail "export tree != working tree"
 echo "PASS: one commit per unit; final tree matches the working tree"
+
+###############################################################################
+echo
+echo "================ scenario 3: provider evidence (fallow) ================"
+unset OCS_PROVIDER
+if ! npx --yes fallow --version >/dev/null 2>&1; then
+  echo "SKIP: fallow unavailable (offline npx cache?) — provider path not exercised"
+else
+  new_repo "$W3"
+  # Pre-existing (inherited) debt: an unused export committed BEFORE the session.
+  printf '\nexport function oldUnused(): number {\n  return 0;\n}\n' >> src/util.ts
+  git add -A && git commit -qm "legacy unused export"
+
+  ocs init
+  ocs start --intent "auth fix"
+
+  # Session work: one benign edit + two INTRODUCED dead-code issues.
+  sed -i.bak 's/return 1;/return 7;/' src/a.ts && rm -f src/a.ts.bak
+  printf '\nexport function newUnused(): number {\n  return 3;\n}\n' >> src/util.ts
+  cat > src/orphan.ts <<'EOF'
+export function orphan(): number {
+  return 42;
+}
+EOF
+  ocs checkpoint --label work
+
+  echo "== finish (with fallow) =="
+  FOUT="$(mktemp)"
+  ocs finish | tee "$FOUT"
+  grep -q "provider fallow@" "$FOUT" || fail "finish did not report provider evidence"
+  grep -q "policy preview" "$FOUT" || fail "finish did not preview the judgment rule"
+
+  PKG3="$(ls .ocs/packages/*.json | head -1)"
+  node -e '
+const fs = require("fs");
+const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const a = p.attribution;
+if (!a || a.gate !== "new-only") { console.error("missing/unexpected attribution: " + JSON.stringify(a)); process.exit(1); }
+if (a.dead_code_introduced < 2) { console.error("expected >=2 introduced dead-code, got " + a.dead_code_introduced); process.exit(1); }
+if (a.dead_code_inherited < 1) { console.error("expected >=1 inherited dead-code, got " + a.dead_code_inherited); process.exit(1); }
+const v = p.validation[0];
+if (!v || v.format !== "sarif" || v.status !== "issues") { console.error("bad validation record: " + JSON.stringify(v && {format: v.format, status: v.status})); process.exit(1); }
+if (!(v.rule_counts["fallow/unused-file"] >= 1)) { console.error("expected a fallow/unused-file finding, got " + JSON.stringify(v.rule_counts)); process.exit(1); }
+if (v.provenance.provider_id !== "fallow") { console.error("bad provenance id"); process.exit(1); }
+if (v.provenance.analyzed_oid !== p.tree) { console.error("analyzed_oid != package tree"); process.exit(1); }
+if (!v.provenance.scope.startsWith("changed-since:")) { console.error("bad scope: " + v.provenance.scope); process.exit(1); }
+const rs = p.risk_signals;
+if (!rs.some(r => r.kind === "dead-code" && r.severity === "error" && r.introduced === true)) { console.error("missing introduced dead-code risk signal"); process.exit(1); }
+if (!rs.some(r => r.kind === "inherited-debt" && r.introduced === false)) { console.error("missing inherited-debt signal"); process.exit(1); }
+const risky = p.change_units.find(u => u.paths.includes("src/orphan.ts"));
+if (!risky || risky.risk !== "error") { console.error("unit containing orphan.ts should carry risk=error, got " + (risky && risky.risk)); process.exit(1); }
+console.log("attribution:", JSON.stringify(a));
+console.log("rule_counts:", JSON.stringify(v.rule_counts));
+' "$PKG3"
+  echo "PASS: package carries SARIF validation, attribution, risk signals, and per-unit risk"
+fi
 
 echo
 echo "ALL ACCEPTANCE CHECKS PASSED"

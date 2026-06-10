@@ -13,6 +13,8 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 
 import { groupChanges, type Change } from "./grouping.ts";
+import { fallowProvider } from "./fallow.ts";
+import type { ProviderResult, Severity } from "./provider.ts";
 
 type Trigger = "explicit" | "command" | "save" | "agent" | "pre-restore";
 
@@ -353,6 +355,43 @@ function cmdFinish(dryRun: boolean): void {
   });
   notes.push(...result.notes);
 
+  // Codebase-intelligence provider (RFC 0005): runs only at finish, only on a
+  // real (non-dry) run, and only when the provider speaks this repo's language.
+  // Absence is normal — the package then carries no analysis evidence.
+  const provider = process.env.OCS_PROVIDER === "none" ? null : fallowProvider;
+  let prov: ProviderResult | null = null;
+  if (changes.length && provider && provider.appliesTo(changes.map((c) => c.path))) {
+    if (dryRun) {
+      notes.push(`${provider.id} analysis skipped in dry-run (runs on real finish)`);
+    } else {
+      prov = provider.analyze({ repoRoot: REPO_ROOT, baselineRef: sess.baselineCommit, analyzedOid: finishTree });
+      notes.push(...prov.notes);
+    }
+  } else if (changes.length && provider) {
+    notes.push(`no ${provider.id} evidence: no ts/js files in this session's changes`);
+  } else if (changes.length) {
+    notes.push("provider disabled (OCS_PROVIDER=none) — package carries no analysis evidence");
+  }
+
+  // Per-unit risk = max severity of provider findings touching the unit's paths.
+  const sevRank: Record<Severity, number> = { note: 0, warn: 1, error: 2 };
+  const pathSev = new Map<string, Severity>();
+  for (const v of prov?.validation ?? [])
+    for (const r of v.results) {
+      if (!r.path) continue;
+      const lvl: Severity = r.level === "error" ? "error" : r.level === "warning" ? "warn" : "note";
+      const cur = pathSev.get(r.path);
+      if (!cur || sevRank[lvl] > sevRank[cur]) pathSev.set(r.path, lvl);
+    }
+  const unitRisk = (paths: string[]): Severity | null => {
+    let best: Severity | null = null;
+    for (const p of paths) {
+      const s = pathSev.get(p);
+      if (s && (!best || sevRank[s] > sevRank[best])) best = s;
+    }
+    return best;
+  };
+
   const units = result.units.map((u) => ({
     id: id("cu"),
     title: u.title,
@@ -360,14 +399,27 @@ function cmdFinish(dryRun: boolean): void {
     confidence: result.confidence,
     paths: u.paths,
     depends_on: [] as string[],
+    risk: unitRisk(u.paths),
     notes: u.notes,
   }));
 
   const planLines = [
     `  ${units.length} change unit(s), grouping confidence ${result.confidence}${result.fallback ? " (fallback: merged)" : ""}:`,
-    ...units.map((u) => `    [${u.kind}] ${u.title} — ${u.paths.join(", ")}`),
+    ...units.map((u) => `    [${u.kind}]${u.risk ? ` (risk: ${u.risk})` : ""} ${u.title} — ${u.paths.join(", ")}`),
     ...notes.map((n) => `  note: ${n}`),
   ];
+  if (prov) {
+    const a = prov.attribution;
+    const intro = a ? a.dead_code_introduced + a.complexity_introduced + a.duplication_introduced : 0;
+    const inher = a ? a.dead_code_inherited + a.complexity_inherited + a.duplication_inherited : 0;
+    const ver = prov.validation[0]?.provenance.provider_version ?? "?";
+    planLines.push(
+      `  provider fallow@${ver}: verdict ${prov.verdict ?? "n/a"} — ${intro} introduced, ${inher} inherited issue(s)`,
+    );
+    // The RFC 0003 judgment rule, previewed: introduced error-level issues are
+    // what would stop a finish once policy lands. Inherited debt never would.
+    if (intro > 0) planLines.push("  ⚠ policy preview: introduced issues would interrupt this finish under RFC 0003");
+  }
   if (dryRun) {
     console.log(`DRY RUN — finish plan for ${sess.id}`);
     if (!changes.length) console.log("  no changes since baseline");
@@ -389,6 +441,9 @@ function cmdFinish(dryRun: boolean): void {
     change_units: units,
     content_changes: changes,
     provenance: [{ actor: "human", contribution: "edit", accepted: true }],
+    validation: prov?.validation ?? [],
+    risk_signals: prov?.risk_signals ?? [],
+    attribution: prov?.attribution ?? null,
     rollback: { strategy: "restore_checkpoint", checkpoint_ref: last ? last.ref : sess.baselineRef },
     tree: finishTree,
   };
