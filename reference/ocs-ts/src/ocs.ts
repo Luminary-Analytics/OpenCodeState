@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import * as readline from "node:readline/promises";
 
 import { groupChanges, type Change } from "./grouping.ts";
 import { fallowProvider } from "./fallow.ts";
@@ -309,7 +310,7 @@ function cmdRestore(which: string): void {
   console.log(`Restored working tree to checkpoint #${cp.n} (${short(cp.commit)}). Prior state saved as a checkpoint.`);
 }
 
-function cmdFinish(dryRun: boolean): void {
+async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
   const s = loadState();
   const sess = requireActive(s);
   const finishTree = snapshotWorkingTree();
@@ -408,23 +409,52 @@ function cmdFinish(dryRun: boolean): void {
     ...units.map((u) => `    [${u.kind}]${u.risk ? ` (risk: ${u.risk})` : ""} ${u.title} — ${u.paths.join(", ")}`),
     ...notes.map((n) => `  note: ${n}`),
   ];
+  let introTotal = 0;
   if (prov) {
     const a = prov.attribution;
-    const intro = a ? a.dead_code_introduced + a.complexity_introduced + a.duplication_introduced : 0;
+    introTotal = a ? a.dead_code_introduced + a.complexity_introduced + a.duplication_introduced : 0;
     const inher = a ? a.dead_code_inherited + a.complexity_inherited + a.duplication_inherited : 0;
     const ver = prov.validation[0]?.provenance.provider_version ?? "?";
     planLines.push(
-      `  provider fallow@${ver}: verdict ${prov.verdict ?? "n/a"} — ${intro} introduced, ${inher} inherited issue(s)`,
+      `  provider fallow@${ver}: verdict ${prov.verdict ?? "n/a"} — ${introTotal} introduced, ${inher} inherited issue(s)`,
     );
-    // The RFC 0003 judgment rule, previewed: introduced error-level issues are
-    // what would stop a finish once policy lands. Inherited debt never would.
-    if (intro > 0) planLines.push("  ⚠ policy preview: introduced issues would interrupt this finish under RFC 0003");
   }
+
+  // The RFC 0003 decide step — the product in one branch: stay silent when the
+  // work is clean and unambiguous; stop when judgment is required. Inherited
+  // debt never interrupts; only what this session made worse does.
+  const reasons: string[] = [];
+  if (units.length > 1) reasons.push(`${units.length} change units — review the split`);
+  if (result.fallback) reasons.push("low grouping confidence");
+  if (introTotal > 0) reasons.push(`${introTotal} issue(s) introduced by this session`);
+
   if (dryRun) {
     console.log(`DRY RUN — finish plan for ${sess.id}`);
     if (!changes.length) console.log("  no changes since baseline");
-    else for (const l of planLines) console.log(l);
+    else {
+      for (const l of planLines) console.log(l);
+      console.log(reasons.length ? `  would interrupt: ${reasons.join("; ")}` : "  would auto-package (clean)");
+    }
     return;
+  }
+
+  if (reasons.length && !yes) {
+    console.log(`⏸ judgment required — finish paused:`);
+    for (const r of reasons) console.log(`  • ${r}`);
+    for (const l of planLines) console.log(l);
+    if (process.stdin.isTTY && process.stdout.isTTY) {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const ans = (await rl.question("approve and package? [y/N] ")).trim().toLowerCase();
+      rl.close();
+      if (ans !== "y" && ans !== "yes") {
+        console.log("finish cancelled — session remains active, nothing written");
+        return;
+      }
+    } else {
+      console.log("non-interactive: re-run with `ocs finish --yes` to approve, or keep working (session remains active)");
+      process.exitCode = 3;
+      return;
+    }
   }
 
   const pid = id("pkg");
@@ -536,7 +566,7 @@ function parseFlags(argv: string[]): { _: string[]; flags: Record<string, string
   return { _, flags };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   const { _, flags } = parseFlags(rest);
   if (cmd !== "init") {
@@ -550,16 +580,16 @@ function main(): void {
     case "status": cmdStatus(); break;
     case "log": cmdLog(); break;
     case "restore": cmdRestore(_[0] ?? ""); break;
-    case "finish": cmdFinish(flags["dry-run"] === true); break;
+    case "finish": await cmdFinish(flags["dry-run"] === true, flags["yes"] === true); break;
     case "export": cmdExport((flags.branch as string) ?? null); break;
     default:
-      console.log("usage: ocs <init|start|checkpoint|status|log|restore|finish|export>");
+      console.log("usage: ocs <init|start|checkpoint|status|log|restore|finish [--dry-run] [--yes]|export>");
       process.exit(cmd ? 1 : 0);
   }
 }
 
 try {
-  main();
+  await main();
 } catch (e) {
   console.error("error:", (e as Error).message);
   process.exit(1);

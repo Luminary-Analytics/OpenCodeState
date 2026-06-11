@@ -50,6 +50,10 @@ the provider — dogfooding the product.
   ([RFC 0005](../rfcs/0005-codebase-intelligence-providers.md)) — packages now
   carry SARIF validation records, risk signals, per-unit risk, and
   introduced-vs-inherited attribution, all wrapped in analysis provenance.
-- **Next:** the policy-driven judgment interrupt at finish, hook-fired agent
-  provenance (`ocs checkpoint --actor ai:<name>` via MCP / Claude Code hooks),
-  and the watcher daemon (Phase 2 of RFC 0003).
+- **Slice 4 (done):** the judgment interrupt — `ocs finish` auto-packages
+  silently when clean and pauses (TTY prompt, or exit 3 non-interactively)
+  on multiple units, low grouping confidence, or session-introduced issues.
+  Inherited debt never interrupts.
+- **Next:** hook-fired agent provenance (`ocs checkpoint --actor ai:<name>`
+  via MCP / Claude Code hooks), richer interrupt actions (edit/split/merge),
+  configurable policy, and the watcher daemon (Phase 2 of RFC 0003).

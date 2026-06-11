@@ -3,8 +3,9 @@
 The first OpenCodeState reference implementation: a **daemonless** CLI that
 proves the loop `init → start → checkpoint → finish → export` end-to-end
 (slice 1), splits a session into logical change units with deterministic
-Tier-0 heuristics (slice 2), and attaches codebase-intelligence evidence from
-`fallow` to every package (slice 3). No AI in the loop. See
+Tier-0 heuristics (slice 2), attaches codebase-intelligence evidence from
+`fallow` to every package (slice 3), and interrupts the finish only when
+judgment is required (slice 4). No AI in the loop. See
 [RFC 0003](../../rfcs/0003-mvp.md), [RFC 0004](../../rfcs/0004-change-grouping.md),
 and [RFC 0005](../../rfcs/0005-codebase-intelligence-providers.md).
 
@@ -68,6 +69,29 @@ non-ts/js sessions get a "no evidence" note, provider errors produce an
 `error`-status validation record — `finish` never breaks for lack of analysis.
 Checkpoints never invoke the provider (hot path stays cheap).
 
+## The judgment interrupt (slice 4)
+
+The RFC 0003 decide step, live: **silent when clean, stop when it matters.**
+
+A finish auto-packages without interruption when there is one change unit,
+high grouping confidence, and no introduced issues. It pauses when judgment is
+required:
+
+- multiple change units (the split deserves a look),
+- low grouping confidence (the grouper refuses to guess), or
+- issues **introduced** by this session (from provider attribution).
+  Inherited debt never interrupts — only what this session made worse.
+
+Behavior by context:
+
+- **Interactive (TTY):** shows the reasons and the plan, then asks
+  `approve and package? [y/N]`. Declining writes nothing; the session stays
+  active.
+- **Non-interactive (CI, pipes):** prints the reasons and plan, writes
+  nothing, and exits with code **3** (`0` success, `1` error, `3` judgment
+  required). `ocs finish --yes` approves explicitly.
+- **Dry-run:** reports `would interrupt: …` or `would auto-package (clean)`.
+
 ## How it stores state
 
 - Content is snapshotted into the repo's own git object database via plumbing
@@ -91,6 +115,7 @@ Runs the scripted scenario from the build contract against a throwaway copy of
 
 ## Status
 
-Slices 1–3 of the MVP. Deferred: the policy-driven judgment interrupt (today
-`finish` only previews it), the watcher daemon, agent-hook provenance (MCP),
-Tier-1 hunk-splitting, and the eventual Rust port of the hot paths.
+Slices 1–4 of the MVP. Deferred: richer interrupt actions (edit/split/merge
+units at the prompt), configurable policy (what counts as interrupt-worthy),
+secret scanning, the watcher daemon, agent-hook provenance (MCP), Tier-1
+hunk-splitting, and the eventual Rust port of the hot paths.

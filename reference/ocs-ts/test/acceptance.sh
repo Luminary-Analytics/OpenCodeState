@@ -62,9 +62,14 @@ if ! grep -q "return 2;" src/a.ts; then fail "restore did not bring back 'return
 if grep -q "GARBAGE" src/a.ts; then fail "restore left GARBAGE in src/a.ts"; fi
 echo "PASS: restore rolled the working tree back"
 
-# More work, then finish.
+# More work, then finish. One clean unit, no introduced risk -> the silent
+# path: no judgment interrupt, exit 0, no --yes needed.
 printf '\nexport const MORE = 3;\n' >> src/util.ts
-echo "== finish =="; ocs finish
+echo "== finish (clean -> silent) =="
+F1OUT="$(mktemp)"
+ocs finish | tee "$F1OUT"
+grep -q "judgment" "$F1OUT" && fail "clean finish should not interrupt" || true
+echo "PASS: clean finish stayed silent (no interrupt)"
 
 PKG="$(ls .ocs/packages/*.json | head -1)"
 node -e '
@@ -139,8 +144,22 @@ grep -q "DRY RUN" "$DR" || fail "dry-run did not print a plan"
 [ -z "$(ls -A .ocs/packages)" ] || fail "dry-run wrote a package"
 echo "PASS: dry-run previews without packaging"
 
-echo "== finish =="
-ocs finish
+echo "== finish (multi-unit -> interrupt) =="
+F2OUT="$(mktemp)"
+set +e
+ocs finish > "$F2OUT" 2>&1
+RC=$?
+set -e
+cat "$F2OUT"
+[ "$RC" = "3" ] || fail "expected exit 3 (judgment required), got $RC"
+grep -q "judgment required" "$F2OUT" || fail "missing judgment banner"
+grep -q "change units — review the split" "$F2OUT" || fail "missing multi-unit reason"
+[ -z "$(ls -A .ocs/packages)" ] || fail "interrupted finish wrote a package"
+ocs status | grep -q "\[active\]" || fail "session should remain active after interrupted finish"
+echo "PASS: non-interactive interrupt paused finish (exit 3, nothing written, session active)"
+
+echo "== finish --yes =="
+ocs finish --yes
 PKG2="$(ls .ocs/packages/*.json | head -1)"
 node -e '
 const fs = require("fs");
@@ -205,12 +224,22 @@ export function orphan(): number {
 EOF
   ocs checkpoint --label work
 
-  echo "== finish (with fallow) =="
+  echo "== finish (introduced issues -> interrupt) =="
   FOUT="$(mktemp)"
-  ocs finish | tee "$FOUT"
+  set +e
+  ocs finish > "$FOUT" 2>&1
+  RC=$?
+  set -e
+  cat "$FOUT"
+  [ "$RC" = "3" ] || fail "expected exit 3 (judgment required), got $RC"
+  grep -q "judgment required" "$FOUT" || fail "missing judgment banner"
+  grep -q "issue(s) introduced by this session" "$FOUT" || fail "interrupt reason should cite introduced issues"
   grep -q "provider fallow@" "$FOUT" || fail "finish did not report provider evidence"
-  grep -q "policy preview" "$FOUT" || fail "finish did not preview the judgment rule"
+  [ -z "$(ls -A .ocs/packages)" ] || fail "interrupted finish wrote a package"
+  echo "PASS: introduced issues interrupted the finish (exit 3, nothing written)"
 
+  echo "== finish --yes =="
+  ocs finish --yes
   PKG3="$(ls .ocs/packages/*.json | head -1)"
   node -e '
 const fs = require("fs");
