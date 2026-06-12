@@ -63,6 +63,19 @@ Success criteria:
 - OpenCodeState produces a structured package describing what changed.
 - The package can be reviewed by a human and exported to Git.
 
+### Milestone 1 status (2026-06-12)
+
+A TypeScript reference implementation lives in `reference/ocs-ts/` and covers
+this milestone end to end: sessions, hook-fired actor-tagged checkpoints,
+non-destructive restore, Tier-0 change grouping, packages carrying
+validation/risk/attribution evidence (via the `fallow` provider), a judgment
+interrupt at finish, human-vs-AI provenance, configurable policy with a
+built-in secret scan, Git export (one commit per change unit), and an MCP
+server so agents drive sessions natively. This repository self-hosts on it —
+this very status update was packaged and exported by `ocs finish`. Still open
+before M1 is closed: the continuous watcher variant of capture (capture is
+hook-driven today) and richer interrupt actions at the finish prompt.
+
 ## Milestone 2: AI-Assisted Packaging
 
 Purpose: make `ocs finish` feel materially better than manual source control.
