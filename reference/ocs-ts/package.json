@@ -1,11 +1,12 @@
 {
   "name": "ocs",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "OpenCodeState v1 reference CLI (slice 1 walking skeleton)",
   "type": "module",
   "bin": {
-    "ocs": "src/ocs.ts"
+    "ocs": "src/ocs.ts",
+    "ocs-mcp": "src/mcp.ts"
   },
   "engines": {
     "node": ">=23.6"

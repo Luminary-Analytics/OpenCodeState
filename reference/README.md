@@ -64,5 +64,11 @@ the provider — dogfooding the product.
   recorded), and a built-in scanner over the session's added lines turns
   high-confidence secrets into redacted validation evidence and a judgment
   interrupt.
-- **Next:** richer interrupt actions (edit/split/merge), an MCP server,
-  opt-in transcript provenance, and the watcher daemon (Phase 2 of RFC 0003).
+- **Slice 7 (done):** the MCP server (`ocs-mcp`) — agents drive
+  init/start/checkpoint/finish natively over stdio JSON-RPC, with agent-first
+  defaults (checkpoints default to actor `ai:claude-code`) and the judgment
+  interrupt crossing the protocol (`ocs_finish` without `approve: true`
+  returns `judgment_required` and writes nothing).
+- **Next:** richer interrupt actions (edit/split/merge), opt-in transcript
+  provenance, the watcher daemon (Phase 2 of RFC 0003), the VS Code
+  extension, and the Rust core port.

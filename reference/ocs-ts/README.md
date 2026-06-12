@@ -6,8 +6,9 @@ proves the loop `init → start → checkpoint → finish → export` end-to-end
 Tier-0 heuristics (slice 2), attaches codebase-intelligence evidence from
 `fallow` to every package (slice 3), interrupts the finish only when
 judgment is required (slice 4), records human-vs-AI authorship from
-actor-tagged checkpoints (slice 5), and enforces configurable policy with a
-built-in secret scan (slice 6). See
+actor-tagged checkpoints (slice 5), enforces configurable policy with a
+built-in secret scan (slice 6), and exposes it all to agents over MCP
+(slice 7). See
 [RFC 0003](../../rfcs/0003-mvp.md), [RFC 0004](../../rfcs/0004-change-grouping.md),
 and [RFC 0005](../../rfcs/0005-codebase-intelligence-providers.md).
 
@@ -147,6 +148,36 @@ Findings become a `secret-scan` validation record, `secret` risk signals, and
 per-unit risk — **always redacted**: the raw match never reaches stdout, the
 plan, or the package JSON.
 
+## MCP server (slice 7)
+
+`src/mcp.ts` is a stdio MCP server so agents drive OpenCodeState natively
+instead of via shell hooks. Register it in Claude Code:
+
+```bash
+claude mcp add ocs -- node /path/to/reference/ocs-ts/src/mcp.ts
+```
+
+Tools: `ocs_init`, `ocs_start`, `ocs_checkpoint`, `ocs_status`, `ocs_log`,
+`ocs_restore`, `ocs_finish_plan`, `ocs_finish`, `ocs_export`.
+
+Agent-first semantics, by design:
+
+- `ocs_checkpoint` defaults to **actor `ai:claude-code`** (the MCP caller is an
+  agent — the CLI's human default inverts here), so provenance is correct
+  without the caller thinking about it.
+- **The judgment interrupt crosses the protocol.** `ocs_finish` without
+  `approve: true` returns `status: judgment_required` (not an error) and
+  writes nothing — an agent cannot silently bypass the human gate. The agent
+  is instructed to surface the plan and only re-call with `approve: true`
+  after a human approves. `ocs_finish_plan` previews cheaply.
+
+Implementation: a tools-only server hand-rolled over newline-delimited
+JSON-RPC (zero runtime dependencies — swap for the official SDK when the
+surface grows beyond tools). Each tool shells the `ocs` CLI — the tested
+contract — mapping exit codes `0/3/other` to `ok / judgment_required / error`.
+The acceptance test drives the real protocol over stdio
+([test/mcp_client.mjs](test/mcp_client.mjs)).
+
 ## How it stores state
 
 - Content is snapshotted into the repo's own git object database via plumbing
@@ -170,7 +201,7 @@ Runs the scripted scenario from the build contract against a throwaway copy of
 
 ## Status
 
-Slices 1–6 of the MVP. Deferred: richer interrupt actions (edit/split/merge
-units at the prompt), the watcher daemon, an MCP server (agents driving ocs
-directly), opt-in transcript provenance, Tier-1 hunk-splitting, and the
-eventual Rust port of the hot paths.
+Slices 1–7 of the MVP. Deferred: richer interrupt actions (edit/split/merge
+units at the prompt), the watcher daemon, opt-in transcript provenance,
+Tier-1 hunk-splitting, the VS Code extension, and the eventual Rust port of
+the hot paths.

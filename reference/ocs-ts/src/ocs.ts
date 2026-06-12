@@ -18,8 +18,7 @@ import { fallowProvider } from "./fallow.ts";
 import type { ProviderResult, Severity, ValidationRecord } from "./provider.ts";
 import { DEFAULT_CONFIG, loadConfig } from "./config.ts";
 import { scanAddedLines, type SecretFinding } from "./secrets.ts";
-
-const OCS_VERSION = "0.6.0";
+import { OCS_VERSION } from "./version.ts";
 
 type Trigger = "explicit" | "command" | "save" | "agent" | "pre-restore";
 

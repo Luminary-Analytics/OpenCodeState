@@ -34,7 +34,8 @@ W2="$(mktemp -d)"
 W3="$(mktemp -d)"
 W4="$(mktemp -d)"
 W5="$(mktemp -d)"
-trap 'rm -rf "$W1" "$W2" "$W3" "$W4" "$W5"' EXIT
+W6="$(mktemp -d)"
+trap 'rm -rf "$W1" "$W2" "$W3" "$W4" "$W5" "$W6"' EXIT
 
 ###############################################################################
 echo "================ scenario 1: the loop ================"
@@ -417,6 +418,26 @@ grep -q "possible secret" "$F5B" || fail "secret should still be recorded in the
 N_PKGS="$(ls .ocs/packages/*.json | wc -l | tr -d ' ')"
 [ "$N_PKGS" = "2" ] || fail "expected 2 packages after second finish, got $N_PKGS"
 echo "PASS: policy tunes the interrupt; evidence is always recorded"
+
+###############################################################################
+echo
+echo "================ scenario 6: MCP server ================"
+new_repo "$W6"
+node "$HERE/mcp_client.mjs" "$W6" || fail "MCP client run failed"
+PKG6="$(ls "$W6"/.ocs/packages/*.json | head -1)"
+node -e '
+const p = require(process.argv[1]);
+const ai = p.provenance.find(r => r.actor === "ai:claude-code");
+if (!ai || ai.contribution !== "generated" || !ai.paths.includes("src/util.ts")) {
+  console.error("missing/wrong ai provenance via MCP: " + JSON.stringify(p.provenance)); process.exit(1);
+}
+const human = p.provenance.find(r => r.actor === "human");
+if (!human || !human.paths.includes("README.md")) {
+  console.error("missing human provenance for the post-checkpoint docs edit"); process.exit(1);
+}
+if (p.change_units.length !== 2) { console.error("expected 2 units via MCP, got " + p.change_units.length); process.exit(1); }
+' "$PKG6"
+echo "PASS: MCP drives init/start/checkpoint/finish with judgment gate + agent provenance"
 
 echo
 echo "ALL ACCEPTANCE CHECKS PASSED"
