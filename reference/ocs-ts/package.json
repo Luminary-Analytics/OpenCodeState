@@ -1,6 +1,6 @@
 {
   "name": "ocs",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "OpenCodeState v1 reference CLI (slice 1 walking skeleton)",
   "type": "module",

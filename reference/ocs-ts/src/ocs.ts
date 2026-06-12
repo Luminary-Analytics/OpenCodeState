@@ -720,7 +720,13 @@ function cmdHooks(action: string, target: string, actor: string): void {
   const hooks = (settings.hooks ??= {});
   const kept = (hooks.PostToolUse ?? []).filter((e) => !JSON.stringify(e).includes(MARKER));
   if (action === "install") {
-    const cmd = `node "${path.resolve(process.argv[1])}" checkpoint --actor ${actor} --label agent-hook >/dev/null 2>&1 || true`;
+    // Prefer a repo-relative script path when ocs lives inside this repo —
+    // .claude/settings.json is committed and shared, and an absolute path
+    // would break on every other machine. Hooks run with cwd = project root.
+    const abs = path.resolve(process.argv[1]);
+    const rel = path.relative(REPO_ROOT, abs);
+    const scriptRef = rel.startsWith("..") || path.isAbsolute(rel) ? abs : rel;
+    const cmd = `node "${scriptRef}" checkpoint --actor ${actor} --label agent-hook >/dev/null 2>&1 || true`;
     kept.push({
       matcher: "Edit|Write|MultiEdit|NotebookEdit",
       hooks: [{ type: "command", command: cmd }],
