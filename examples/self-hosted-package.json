@@ -1,0 +1,163 @@
+{
+  "id": "pkg_mqauy8ud24dac2",
+  "session_id": "ses_mqauw05daa424c",
+  "created_at": "2026-06-12T11:43:18.853Z",
+  "intent": {
+    "declared": "fix hook path portability; update roadmap status; install agent hook",
+    "inferred": null,
+    "summary": "fix hook path portability; update roadmap status; install agent hook"
+  },
+  "change_units": [
+    {
+      "id": "cu_mqauy8ucd85517",
+      "title": "Changes in .claude",
+      "kind": "change",
+      "confidence": 1,
+      "paths": [
+        ".claude/settings.json"
+      ],
+      "depends_on": [],
+      "risk": null,
+      "actors": [
+        "ai:claude-code"
+      ],
+      "notes": []
+    },
+    {
+      "id": "cu_mqauy8ud9b5bb9",
+      "title": "Changes in reference/ocs-ts/src",
+      "kind": "change",
+      "confidence": 1,
+      "paths": [
+        "reference/ocs-ts/package.json",
+        "reference/ocs-ts/src/ocs.ts",
+        "reference/ocs-ts/src/version.ts"
+      ],
+      "depends_on": [],
+      "risk": null,
+      "actors": [
+        "ai:claude-code"
+      ],
+      "notes": []
+    },
+    {
+      "id": "cu_mqauy8uddc332b",
+      "title": "Documentation",
+      "kind": "docs",
+      "confidence": 1,
+      "paths": [
+        "ROADMAP.md"
+      ],
+      "depends_on": [],
+      "risk": null,
+      "actors": [
+        "ai:claude-code"
+      ],
+      "notes": []
+    }
+  ],
+  "content_changes": [
+    {
+      "path": ".claude/settings.json",
+      "status": "added",
+      "before_oid": null,
+      "after_oid": "d6aa49c8d80c462946468980c8e1d84f248b1a8b",
+      "mode": "100644"
+    },
+    {
+      "path": "ROADMAP.md",
+      "status": "modified",
+      "before_oid": "98294f42a79cd27fa43f6ba7afa95b81ec05459c",
+      "after_oid": "ce72b800b214e10aabc3a4389a81d7cbd1e8d291",
+      "mode": "100644"
+    },
+    {
+      "path": "reference/ocs-ts/package.json",
+      "status": "modified",
+      "before_oid": "0c108655b59ff0ce452b68e64207c394e7d24b59",
+      "after_oid": "837d647e22e9daba98a194789da07b5fccad7504",
+      "mode": "100644"
+    },
+    {
+      "path": "reference/ocs-ts/src/ocs.ts",
+      "status": "modified",
+      "before_oid": "96170b05d2f676a304151b3905f505787840eb85",
+      "after_oid": "e20cb9352e0311da4d38ebf0643a8924d5e68152",
+      "mode": "100755"
+    },
+    {
+      "path": "reference/ocs-ts/src/version.ts",
+      "status": "modified",
+      "before_oid": "4e849290830859083447a921a31ed5a1bceeb08b",
+      "after_oid": "b05c55bd79f44a50733a4bb445622209452708c8",
+      "mode": "100644"
+    }
+  ],
+  "provenance": [
+    {
+      "actor": "ai:claude-code",
+      "contribution": "generated",
+      "accepted": true,
+      "paths": [
+        ".claude/settings.json",
+        "ROADMAP.md",
+        "reference/ocs-ts/package.json",
+        "reference/ocs-ts/src/ocs.ts",
+        "reference/ocs-ts/src/version.ts"
+      ]
+    }
+  ],
+  "validation": [
+    {
+      "type": "secret-scan",
+      "format": "ocs",
+      "status": "passed",
+      "rule_counts": {},
+      "results": [],
+      "provenance": {
+        "provider_id": "ocs-secret-scan",
+        "provider_version": "0.7.1",
+        "analyzed_oid": "f104950bb9fa4066630add9ccbd0f3d5a1717b7e",
+        "scope": "added-lines",
+        "timestamp": "2026-06-12T11:43:17.252Z"
+      }
+    },
+    {
+      "type": "audit",
+      "format": "sarif",
+      "status": "passed",
+      "rule_counts": {},
+      "results": [],
+      "provenance": {
+        "provider_id": "fallow",
+        "provider_version": "2.94.0",
+        "analyzed_oid": "f104950bb9fa4066630add9ccbd0f3d5a1717b7e",
+        "scope": "changed-since:765c4ad30b20a7b50ca0f50fc49ffcb6549cf478",
+        "timestamp": "2026-06-12T11:43:18.852Z"
+      }
+    }
+  ],
+  "risk_signals": [
+    {
+      "kind": "inherited-debt",
+      "severity": "note",
+      "target": null,
+      "rationale": "11 pre-existing issue(s) in touched files (not this session's work)",
+      "introduced": false
+    }
+  ],
+  "attribution": {
+    "gate": "new-only",
+    "dead_code_introduced": 0,
+    "dead_code_inherited": 0,
+    "complexity_introduced": 0,
+    "complexity_inherited": 11,
+    "duplication_introduced": 0,
+    "duplication_inherited": 0
+  },
+  "rollback": {
+    "strategy": "restore_checkpoint",
+    "checkpoint_ref": "refs/ocs/checkpoints/ses_mqauw05daa424c/3"
+  },
+  "tree": "f104950bb9fa4066630add9ccbd0f3d5a1717b7e"
+}

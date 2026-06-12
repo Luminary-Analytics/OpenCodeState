@@ -2,8 +2,16 @@
 
 This directory holds the first OpenCodeState reference implementation:
 [`ocs-ts/`](ocs-ts/) is the TypeScript walking skeleton (slice 1: the daemonless
-loop; slice 2: Tier-0 change grouping). The Rust core port comes later. The
-architecture is specified in
+loop; slice 2: Tier-0 change grouping). The Rust core port comes later.
+
+**This repository self-hosts on it.** The workspace is initialized at the repo
+root, the Claude Code agent hook is installed (`.claude/settings.json`, with a
+repo-relative command), and real sessions are packaged by `ocs finish` and
+exported as one-commit-per-unit history — see
+[examples/self-hosted-package.json](../examples/self-hosted-package.json) and
+commits `fc9288e`/`7929636`/`089f8f1`.
+
+The architecture is specified in
 [RFC 0003 (MVP)](../rfcs/0003-mvp.md) and
 [RFC 0005 (Codebase Intelligence Providers)](../rfcs/0005-codebase-intelligence-providers.md).
 
