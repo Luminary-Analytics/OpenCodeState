@@ -59,6 +59,10 @@ the provider — dogfooding the product.
   `ai:<name>`, multi-actor files carry both) and per-unit `actors`.
   `ocs hooks install claude` wires a Claude Code PostToolUse hook that fires
   `ocs checkpoint --actor ai:claude-code` after agent edits.
-- **Next:** richer interrupt actions (edit/split/merge), configurable policy,
-  an MCP server, opt-in transcript provenance, and the watcher daemon
-  (Phase 2 of RFC 0003).
+- **Slice 6 (done):** policy + secret scan — `.ocs/config.json` implements the
+  Policy primitive (interrupt triggers are tunable; evidence is always
+  recorded), and a built-in scanner over the session's added lines turns
+  high-confidence secrets into redacted validation evidence and a judgment
+  interrupt.
+- **Next:** richer interrupt actions (edit/split/merge), an MCP server,
+  opt-in transcript provenance, and the watcher daemon (Phase 2 of RFC 0003).

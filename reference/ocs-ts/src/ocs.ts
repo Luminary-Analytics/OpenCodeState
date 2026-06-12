@@ -15,7 +15,11 @@ import * as readline from "node:readline/promises";
 
 import { groupChanges, type Change } from "./grouping.ts";
 import { fallowProvider } from "./fallow.ts";
-import type { ProviderResult, Severity } from "./provider.ts";
+import type { ProviderResult, Severity, ValidationRecord } from "./provider.ts";
+import { DEFAULT_CONFIG, loadConfig } from "./config.ts";
+import { scanAddedLines, type SecretFinding } from "./secrets.ts";
+
+const OCS_VERSION = "0.6.0";
 
 type Trigger = "explicit" | "command" | "save" | "agent" | "pre-restore";
 
@@ -165,6 +169,31 @@ function readHistoryCommits(): string[][] {
     .filter((files) => files.length > 0);
 }
 
+// ADDED lines of one file between two trees, with new-file line numbers
+// (for the secret scanner). Parses unified-diff hunk headers.
+function addedLinesFor(a: string, b: string, p: string): { lines: { line: number; text: string }[]; truncated: boolean } {
+  const out = tryGit(["diff", a, b, "--", p]);
+  if (!out) return { lines: [], truncated: false };
+  const lines: { line: number; text: string }[] = [];
+  let newLine = 0;
+  for (const l of out.split("\n")) {
+    const h = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+    if (h) {
+      newLine = parseInt(h[1], 10);
+      continue;
+    }
+    if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("\\")) continue;
+    if (l.startsWith("+")) {
+      lines.push({ line: newLine, text: l.slice(1) });
+      newLine++;
+      if (lines.length >= 5000) return { lines, truncated: true };
+    } else if (!l.startsWith("-")) {
+      newLine++;
+    }
+  }
+  return { lines, truncated: false };
+}
+
 // Normalized changed lines of one file between two trees (diff-similarity signal).
 function changedLinesFor(a: string, b: string, p: string): string[] {
   const out = tryGit(["diff", a, b, "--", p]);
@@ -220,7 +249,11 @@ function cmdInit(): void {
   if (!fs.existsSync(statePath())) {
     saveState({ version: 1, activeSession: null, sessions: {}, packages: {} });
   }
-  console.log("Initialized OpenCodeState workspace in .ocs/");
+  const configPath = path.join(ocsDir(), "config.json");
+  if (!fs.existsSync(configPath)) {
+    fs.writeFileSync(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n");
+  }
+  console.log("Initialized OpenCodeState workspace in .ocs/ (policy: .ocs/config.json)");
 }
 
 function cmdStart(intent: string | null): void {
@@ -369,10 +402,61 @@ async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
   });
   notes.push(...result.notes);
 
+  const cfg = loadConfig(path.join(ocsDir(), "config.json"));
+
+  // Secret scan over the session's ADDED lines (policy.secret_scan). Local and
+  // cheap, so it runs even in dry-run. Findings are redacted before they touch
+  // any output. Secrets in added lines are introduced-by-definition.
+  const secretFindings: SecretFinding[] = [];
+  if (cfg.policy.secret_scan && changes.length) {
+    const allow: RegExp[] = [];
+    for (const pat of cfg.policy.secret_allow_patterns) {
+      try {
+        allow.push(new RegExp(pat));
+      } catch {
+        notes.push(`ignoring invalid secret_allow_pattern: ${pat}`);
+      }
+    }
+    for (const c of changes) {
+      if (c.status === "deleted") continue;
+      const { lines, truncated } = addedLinesFor(sess.baselineTree, finishTree, c.path);
+      if (truncated) notes.push(`secret scan truncated at 5000 added lines for ${c.path}`);
+      secretFindings.push(...scanAddedLines(c.path, lines, allow));
+    }
+  }
+  const secretErrors = secretFindings.filter((f) => f.severity === "error").length;
+  const secretRecord: ValidationRecord | null =
+    cfg.policy.secret_scan && changes.length
+      ? {
+          type: "secret-scan",
+          format: "ocs",
+          status: secretFindings.length ? "issues" : "passed",
+          rule_counts: secretFindings.reduce<Record<string, number>>((acc, f) => {
+            acc[`ocs/${f.rule}`] = (acc[`ocs/${f.rule}`] ?? 0) + 1;
+            return acc;
+          }, {}),
+          results: secretFindings.map((f) => ({
+            rule_id: `ocs/${f.rule}`,
+            level: f.severity === "warn" ? "warning" : "error",
+            path: f.path,
+            line: f.line,
+            message: f.redacted,
+          })),
+          provenance: {
+            provider_id: "ocs-secret-scan",
+            provider_version: OCS_VERSION,
+            analyzed_oid: finishTree,
+            scope: "added-lines",
+            timestamp: nowISO(),
+          },
+        }
+      : null;
+
   // Codebase-intelligence provider (RFC 0005): runs only at finish, only on a
   // real (non-dry) run, and only when the provider speaks this repo's language.
   // Absence is normal — the package then carries no analysis evidence.
-  const provider = process.env.OCS_PROVIDER === "none" ? null : fallowProvider;
+  const providerName = process.env.OCS_PROVIDER ?? cfg.provider;
+  const provider = providerName === "none" ? null : fallowProvider;
   let prov: ProviderResult | null = null;
   if (changes.length && provider && provider.appliesTo(changes.map((c) => c.path))) {
     if (dryRun) {
@@ -384,7 +468,7 @@ async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
   } else if (changes.length && provider) {
     notes.push(`no ${provider.id} evidence: no ts/js files in this session's changes`);
   } else if (changes.length) {
-    notes.push("provider disabled (OCS_PROVIDER=none) — package carries no analysis evidence");
+    notes.push("provider disabled — package carries no analysis evidence");
   }
 
   // Per-unit risk = max severity of provider findings touching the unit's paths.
@@ -397,6 +481,10 @@ async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
       const cur = pathSev.get(r.path);
       if (!cur || sevRank[lvl] > sevRank[cur]) pathSev.set(r.path, lvl);
     }
+  for (const f of secretFindings) {
+    const cur = pathSev.get(f.path);
+    if (!cur || sevRank[f.severity] > sevRank[cur]) pathSev.set(f.path, f.severity);
+  }
   const unitRisk = (paths: string[]): Severity | null => {
     let best: Severity | null = null;
     for (const p of paths) {
@@ -465,14 +553,26 @@ async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
     planLines.push(
       `  provenance: ${provenanceRecords.map((r) => `${r.actor} (${r.paths.length} file(s))`).join(", ")}`,
     );
+  if (secretFindings.length) {
+    planLines.push(`  secrets: ${secretFindings.length} possible secret(s) in added lines (${secretErrors} error-level)`);
+    for (const f of secretFindings.slice(0, 10))
+      planLines.push(`    [${f.severity}] ocs/${f.rule} ${f.path}:${f.line} ${f.redacted}`);
+    if (secretFindings.length > 10) planLines.push(`    …and ${secretFindings.length - 10} more`);
+  }
 
   // The RFC 0003 decide step — the product in one branch: stay silent when the
   // work is clean and unambiguous; stop when judgment is required. Inherited
-  // debt never interrupts; only what this session made worse does.
+  // debt never interrupts; only what this session made worse does. Policy
+  // (.ocs/config.json) tunes what counts as interrupt-worthy; it never tunes
+  // what gets recorded.
   const reasons: string[] = [];
-  if (units.length > 1) reasons.push(`${units.length} change units — review the split`);
-  if (result.fallback) reasons.push("low grouping confidence");
-  if (introTotal > 0) reasons.push(`${introTotal} issue(s) introduced by this session`);
+  if (units.length > 1 && cfg.policy.interrupt_on_multiple_units)
+    reasons.push(`${units.length} change units — review the split`);
+  if (result.fallback && cfg.policy.interrupt_on_low_confidence) reasons.push("low grouping confidence");
+  if (introTotal > 0 && cfg.policy.interrupt_on_introduced_issues)
+    reasons.push(`${introTotal} issue(s) introduced by this session`);
+  if (secretErrors > 0 && cfg.policy.interrupt_on_secrets)
+    reasons.push(`${secretErrors} possible secret(s) added`);
 
   if (dryRun) {
     console.log(`DRY RUN — finish plan for ${sess.id}`);
@@ -517,8 +617,17 @@ async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
     change_units: units,
     content_changes: changes,
     provenance: provenanceRecords,
-    validation: prov?.validation ?? [],
-    risk_signals: prov?.risk_signals ?? [],
+    validation: [...(secretRecord ? [secretRecord] : []), ...(prov?.validation ?? [])],
+    risk_signals: [
+      ...secretFindings.map((f) => ({
+        kind: "secret",
+        severity: f.severity,
+        target: f.path,
+        rationale: `possible ${f.rule} in added lines (${f.redacted})`,
+        introduced: true,
+      })),
+      ...(prov?.risk_signals ?? []),
+    ],
     attribution: prov?.attribution ?? null,
     rollback: { strategy: "restore_checkpoint", checkpoint_ref: last ? last.ref : sess.baselineRef },
     tree: finishTree,

@@ -33,7 +33,8 @@ W1="$(mktemp -d)"
 W2="$(mktemp -d)"
 W3="$(mktemp -d)"
 W4="$(mktemp -d)"
-trap 'rm -rf "$W1" "$W2" "$W3" "$W4"' EXIT
+W5="$(mktemp -d)"
+trap 'rm -rf "$W1" "$W2" "$W3" "$W4" "$W5"' EXIT
 
 ###############################################################################
 echo "================ scenario 1: the loop ================"
@@ -82,7 +83,11 @@ node -e '
     if (!paths.includes(want)) { console.error("MISSING " + want); process.exit(1); }
   }
   if (p.change_units.length !== 1) { console.error("expected 1 change unit, got " + p.change_units.length); process.exit(1); }
-  if (p.validation.length !== 0) { console.error("expected no validation with OCS_PROVIDER=none"); process.exit(1); }
+  // provider disabled -> only the built-in secret scan record (status passed)
+  if (p.validation.length !== 1 || p.validation[0].type !== "secret-scan" || p.validation[0].status !== "passed") {
+    console.error("expected exactly one passed secret-scan record, got " + JSON.stringify(p.validation.map(v => v.type + ":" + v.status)));
+    process.exit(1);
+  }
 ' "$PKG"
 echo "PASS: package captured the session net changes in 1 change unit"
 
@@ -249,8 +254,8 @@ const a = p.attribution;
 if (!a || a.gate !== "new-only") { console.error("missing/unexpected attribution: " + JSON.stringify(a)); process.exit(1); }
 if (a.dead_code_introduced < 2) { console.error("expected >=2 introduced dead-code, got " + a.dead_code_introduced); process.exit(1); }
 if (a.dead_code_inherited < 1) { console.error("expected >=1 inherited dead-code, got " + a.dead_code_inherited); process.exit(1); }
-const v = p.validation[0];
-if (!v || v.format !== "sarif" || v.status !== "issues") { console.error("bad validation record: " + JSON.stringify(v && {format: v.format, status: v.status})); process.exit(1); }
+const v = p.validation.find(x => x.format === "sarif");
+if (!v || v.status !== "issues") { console.error("bad sarif validation record: " + JSON.stringify(p.validation.map(x => x.type + ":" + x.status))); process.exit(1); }
 if (!(v.rule_counts["fallow/unused-file"] >= 1)) { console.error("expected a fallow/unused-file finding, got " + JSON.stringify(v.rule_counts)); process.exit(1); }
 if (v.provenance.provider_id !== "fallow") { console.error("bad provenance id"); process.exit(1); }
 if (v.provenance.analyzed_oid !== p.tree) { console.error("analyzed_oid != package tree"); process.exit(1); }
@@ -332,6 +337,86 @@ const left = JSON.stringify(s).includes("agent-hook");
 if (left) { console.error("ocs hook entry survived removal"); process.exit(1); }
 '
 echo "PASS: hook install is idempotent and removable"
+
+###############################################################################
+echo
+echo "================ scenario 5: policy + secret scan ================"
+export OCS_PROVIDER=none
+new_repo "$W5"
+ocs init
+node -e '
+const c = require("./.ocs/config.json");
+if (c.provider !== "fallow" || c.policy.secret_scan !== true || c.policy.interrupt_on_secrets !== true) {
+  console.error("init should write policy defaults, got " + JSON.stringify(c)); process.exit(1);
+}
+'
+echo "PASS: init writes policy defaults to .ocs/config.json"
+
+ocs start --intent "oops"
+cat > src/creds.ts <<'EOF'
+export const config = {
+  awsKey: "AKIAZZZZAAAA0000BBBB",
+  password: "hunter2hunter2hunter2",
+};
+EOF
+
+echo "== dry-run flags the secret (redacted) =="
+DR5="$(mktemp)"
+ocs finish --dry-run | tee "$DR5"
+grep -q "would interrupt" "$DR5" || fail "dry-run should report it would interrupt"
+grep -q "possible secret" "$DR5" || fail "dry-run should mention secrets"
+if grep -q "AKIAZZZZAAAA0000BBBB" "$DR5"; then fail "secret leaked unredacted in dry-run output"; fi
+echo "PASS: dry-run flags the secret without leaking it"
+
+echo "== finish (secret -> interrupt) =="
+F5="$(mktemp)"
+set +e
+ocs finish > "$F5" 2>&1
+RC=$?
+set -e
+cat "$F5"
+[ "$RC" = "3" ] || fail "expected exit 3 (secret), got $RC"
+grep -q "possible secret(s) added" "$F5" || fail "missing secret interrupt reason"
+[ -z "$(ls -A .ocs/packages)" ] || fail "interrupted finish wrote a package"
+
+echo "== finish --yes records redacted evidence =="
+ocs finish --yes
+PKG5="$(ls .ocs/packages/*.json | head -1)"
+node -e '
+const fs = require("fs");
+const raw = fs.readFileSync(process.argv[1], "utf8");
+if (raw.includes("AKIAZZZZAAAA0000BBBB")) { console.error("RAW SECRET IN PACKAGE JSON"); process.exit(1); }
+const p = JSON.parse(raw);
+const v = p.validation.find(x => x.type === "secret-scan");
+if (!v || v.status !== "issues") { console.error("missing secret-scan validation"); process.exit(1); }
+const err = v.results.find(r => r.rule_id === "ocs/aws-access-key-id" && r.level === "error");
+if (!err || err.path !== "src/creds.ts" || typeof err.line !== "number") { console.error("bad aws finding: " + JSON.stringify(v.results)); process.exit(1); }
+if (!v.results.some(r => r.rule_id === "ocs/credential-assignment" && r.level === "warning")) { console.error("missing warn-level credential finding"); process.exit(1); }
+if (!p.risk_signals.some(r => r.kind === "secret" && r.severity === "error" && r.introduced === true)) { console.error("missing secret risk signal"); process.exit(1); }
+const u = p.change_units.find(u => u.paths.includes("src/creds.ts"));
+if (!u || u.risk !== "error") { console.error("unit should carry risk=error"); process.exit(1); }
+console.log("secret evidence:", JSON.stringify(v.rule_counts));
+' "$PKG5"
+echo "PASS: secret evidence recorded, redacted everywhere"
+
+echo "== policy knob: interrupt_on_secrets=false =="
+node -e '
+const fs = require("fs");
+const c = JSON.parse(fs.readFileSync(".ocs/config.json", "utf8"));
+c.policy.interrupt_on_secrets = false;
+fs.writeFileSync(".ocs/config.json", JSON.stringify(c, null, 2) + "\n");
+'
+ocs start --intent "second"
+cat > src/creds2.ts <<'EOF'
+export const second = "AKIAQQQQWWWW1111EEEE";
+EOF
+F5B="$(mktemp)"
+ocs finish | tee "$F5B"
+if grep -q "judgment" "$F5B"; then fail "policy off: secret should not interrupt"; fi
+grep -q "possible secret" "$F5B" || fail "secret should still be recorded in the plan"
+N_PKGS="$(ls .ocs/packages/*.json | wc -l | tr -d ' ')"
+[ "$N_PKGS" = "2" ] || fail "expected 2 packages after second finish, got $N_PKGS"
+echo "PASS: policy tunes the interrupt; evidence is always recorded"
 
 echo
 echo "ALL ACCEPTANCE CHECKS PASSED"

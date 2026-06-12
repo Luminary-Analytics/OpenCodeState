@@ -5,8 +5,9 @@ proves the loop `init → start → checkpoint → finish → export` end-to-end
 (slice 1), splits a session into logical change units with deterministic
 Tier-0 heuristics (slice 2), attaches codebase-intelligence evidence from
 `fallow` to every package (slice 3), interrupts the finish only when
-judgment is required (slice 4), and records human-vs-AI authorship from
-actor-tagged checkpoints (slice 5). See
+judgment is required (slice 4), records human-vs-AI authorship from
+actor-tagged checkpoints (slice 5), and enforces configurable policy with a
+built-in secret scan (slice 6). See
 [RFC 0003](../../rfcs/0003-mvp.md), [RFC 0004](../../rfcs/0004-change-grouping.md),
 and [RFC 0005](../../rfcs/0005-codebase-intelligence-providers.md).
 
@@ -117,6 +118,35 @@ tool call (the same pattern fallow's `setup-hooks` uses for its commit gate).
 It swallows all failures — no active session, no workspace — so it never
 blocks the agent, and install/remove are idempotent.
 
+## Policy + secret scan (slice 6)
+
+`ocs init` writes `.ocs/config.json` — the first real implementation of the
+Policy primitive (RFC 0002). Policy decides what is **interrupt-worthy**; it
+never decides what gets **recorded** (evidence is always captured):
+
+```jsonc
+{
+  "provider": "fallow",            // or "none"; OCS_PROVIDER env overrides
+  "policy": {
+    "interrupt_on_multiple_units": true,
+    "interrupt_on_low_confidence": true,
+    "interrupt_on_introduced_issues": true,
+    "interrupt_on_secrets": true,
+    "secret_scan": true,
+    "secret_allow_patterns": []    // regexes to suppress false positives
+  }
+}
+```
+
+The built-in secret scanner runs at finish (and in dry-run — it is local and
+cheap) over the session's **added lines**, so a finding is introduced-by-
+definition. High-precision token formats (AWS, GitHub, Slack, Stripe, npm,
+Google, private-key headers) are error-level and interrupt under default
+policy; keyword/value assignments are warn-level and never interrupt alone.
+Findings become a `secret-scan` validation record, `secret` risk signals, and
+per-unit risk — **always redacted**: the raw match never reaches stdout, the
+plan, or the package JSON.
+
 ## How it stores state
 
 - Content is snapshotted into the repo's own git object database via plumbing
@@ -140,8 +170,7 @@ Runs the scripted scenario from the build contract against a throwaway copy of
 
 ## Status
 
-Slices 1–5 of the MVP. Deferred: richer interrupt actions (edit/split/merge
-units at the prompt), configurable policy (what counts as interrupt-worthy),
-secret scanning, the watcher daemon, an MCP server (agents driving ocs
+Slices 1–6 of the MVP. Deferred: richer interrupt actions (edit/split/merge
+units at the prompt), the watcher daemon, an MCP server (agents driving ocs
 directly), opt-in transcript provenance, Tier-1 hunk-splitting, and the
 eventual Rust port of the hot paths.
