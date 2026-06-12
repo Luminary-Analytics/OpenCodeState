@@ -256,7 +256,7 @@ function cmdStart(intent: string | null): void {
 function cmdCheckpoint(label: string | null, actor: string): void {
   const s = loadState();
   const sess = requireActive(s);
-  const cp = makeCheckpoint(sess, "explicit", actor, label);
+  const cp = makeCheckpoint(sess, actor.startsWith("ai:") ? "agent" : "explicit", actor, label);
   saveState(s);
   console.log(`Checkpoint #${cp.n} (${short(cp.commit)})${label ? ` — ${label}` : ""} by ${actor}`);
 }
@@ -332,12 +332,25 @@ async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
   }
 
   const byPath = new Map(changes.map((c) => [c.path, c] as const));
+  // Window i spans trees[i-1] -> trees[i] and belongs to the actor who fired
+  // checkpoint i; the final window (last checkpoint -> finish) belongs to
+  // whoever runs finish (human in v1). Trees telescope from baseline to finish,
+  // so every net-changed path appears in at least one window, and a path
+  // touched by several actors honestly carries all of them. Only actor + paths
+  // are recorded — no prompts, no transcripts (provenance is not surveillance).
   const trees = [sess.baselineTree, ...sess.checkpoints.map((c) => c.tree), finishTree];
+  const windowActors = [...sess.checkpoints.map((c) => c.actor), "human"];
   const windows: string[][] = [];
+  const pathActors = new Map<string, Set<string>>();
   for (let i = 1; i < trees.length; i++) {
     if (trees[i] === trees[i - 1]) continue;
     const w = diffTrees(trees[i - 1], trees[i]).map((c) => c.path).filter((p) => byPath.has(p));
-    if (w.length) windows.push(w);
+    if (!w.length) continue;
+    windows.push(w);
+    for (const p of w) {
+      if (!pathActors.has(p)) pathActors.set(p, new Set());
+      pathActors.get(p)!.add(windowActors[i - 1]);
+    }
   }
 
   const result = groupChanges({
@@ -393,6 +406,12 @@ async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
     return best;
   };
 
+  const actorsOf = (paths: string[]): string[] => {
+    const s = new Set<string>();
+    for (const p of paths) for (const a of pathActors.get(p) ?? []) s.add(a);
+    return [...s].sort();
+  };
+
   const units = result.units.map((u) => ({
     id: id("cu"),
     title: u.title,
@@ -401,8 +420,31 @@ async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
     paths: u.paths,
     depends_on: [] as string[],
     risk: unitRisk(u.paths),
+    actors: actorsOf(u.paths),
     notes: u.notes,
   }));
+
+  const actorPaths = new Map<string, string[]>();
+  for (const [p, as] of pathActors)
+    for (const a of as) {
+      if (!actorPaths.has(a)) actorPaths.set(a, []);
+      actorPaths.get(a)!.push(p);
+    }
+  const provenanceRecords = [...actorPaths.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([actor, paths]) => ({
+      actor,
+      contribution: actor.startsWith("ai:") ? "generated" : "edit",
+      accepted: true,
+      paths: paths.sort(),
+    }));
+  if (!provenanceRecords.length && changes.length)
+    provenanceRecords.push({
+      actor: "human",
+      contribution: "edit",
+      accepted: true,
+      paths: changes.map((c) => c.path).sort(),
+    });
 
   const planLines = [
     `  ${units.length} change unit(s), grouping confidence ${result.confidence}${result.fallback ? " (fallback: merged)" : ""}:`,
@@ -419,6 +461,10 @@ async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
       `  provider fallow@${ver}: verdict ${prov.verdict ?? "n/a"} — ${introTotal} introduced, ${inher} inherited issue(s)`,
     );
   }
+  if (provenanceRecords.length)
+    planLines.push(
+      `  provenance: ${provenanceRecords.map((r) => `${r.actor} (${r.paths.length} file(s))`).join(", ")}`,
+    );
 
   // The RFC 0003 decide step — the product in one branch: stay silent when the
   // work is clean and unambiguous; stop when judgment is required. Inherited
@@ -470,7 +516,7 @@ async function cmdFinish(dryRun: boolean, yes: boolean): Promise<void> {
     },
     change_units: units,
     content_changes: changes,
-    provenance: [{ actor: "human", contribution: "edit", accepted: true }],
+    provenance: provenanceRecords,
     validation: prov?.validation ?? [],
     risk_signals: prov?.risk_signals ?? [],
     attribution: prov?.attribution ?? null,
@@ -545,6 +591,46 @@ function cmdExport(branch: string | null): void {
   console.log(`Exported package ${pid} → branch ${br} (${commits} commit(s), head ${short(parent!)})`);
 }
 
+// Install/remove the Claude Code agent hook (the fallow `setup-hooks` pattern,
+// pointed at provenance): after every Edit/Write tool call, the agent fires
+// `ocs checkpoint --actor ai:<name>`, so AI edits land as actor-tagged
+// checkpoints and packages show human-vs-AI authorship. The hook swallows all
+// failures (no active session, etc.) so it never blocks the agent.
+function cmdHooks(action: string, target: string, actor: string): void {
+  if (!["install", "remove"].includes(action) || target !== "claude")
+    throw new Error("usage: ocs hooks <install|remove> claude [--actor ai:<name>]");
+  const settingsPath = path.join(REPO_ROOT, ".claude", "settings.json");
+  const MARKER = "--label agent-hook";
+  type Settings = { hooks?: { PostToolUse?: unknown[] } & Record<string, unknown> } & Record<string, unknown>;
+  if (action === "remove" && !fs.existsSync(settingsPath)) {
+    console.log("no .claude/settings.json — nothing to remove");
+    return;
+  }
+  const settings: Settings = fs.existsSync(settingsPath)
+    ? (JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Settings)
+    : {};
+  const hooks = (settings.hooks ??= {});
+  const kept = (hooks.PostToolUse ?? []).filter((e) => !JSON.stringify(e).includes(MARKER));
+  if (action === "install") {
+    const cmd = `node "${path.resolve(process.argv[1])}" checkpoint --actor ${actor} --label agent-hook >/dev/null 2>&1 || true`;
+    kept.push({
+      matcher: "Edit|Write|MultiEdit|NotebookEdit",
+      hooks: [{ type: "command", command: cmd }],
+    });
+    hooks.PostToolUse = kept;
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+    console.log(`Installed Claude Code agent hook in .claude/settings.json`);
+    console.log(`  after Edit/Write tool calls: ocs checkpoint --actor ${actor}`);
+  } else {
+    hooks.PostToolUse = kept;
+    if (!kept.length) delete hooks.PostToolUse;
+    if (!Object.keys(hooks).length) delete settings.hooks;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+    console.log("Removed ocs-managed Claude Code hooks");
+  }
+}
+
 // ---------- cli ----------
 function parseFlags(argv: string[]): { _: string[]; flags: Record<string, string | boolean> } {
   const _: string[] = [];
@@ -582,8 +668,9 @@ async function main(): Promise<void> {
     case "restore": cmdRestore(_[0] ?? ""); break;
     case "finish": await cmdFinish(flags["dry-run"] === true, flags["yes"] === true); break;
     case "export": cmdExport((flags.branch as string) ?? null); break;
+    case "hooks": cmdHooks(_[0] ?? "", _[1] ?? "", (flags.actor as string) ?? "ai:claude-code"); break;
     default:
-      console.log("usage: ocs <init|start|checkpoint|status|log|restore|finish [--dry-run] [--yes]|export>");
+      console.log("usage: ocs <init|start|checkpoint|status|log|restore|finish [--dry-run] [--yes]|export|hooks>");
       process.exit(cmd ? 1 : 0);
   }
 }

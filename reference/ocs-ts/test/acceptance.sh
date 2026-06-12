@@ -32,7 +32,8 @@ worktree_oid() { # tree oid of the current working tree (throwaway index)
 W1="$(mktemp -d)"
 W2="$(mktemp -d)"
 W3="$(mktemp -d)"
-trap 'rm -rf "$W1" "$W2" "$W3"' EXIT
+W4="$(mktemp -d)"
+trap 'rm -rf "$W1" "$W2" "$W3" "$W4"' EXIT
 
 ###############################################################################
 echo "================ scenario 1: the loop ================"
@@ -264,6 +265,73 @@ console.log("rule_counts:", JSON.stringify(v.rule_counts));
 ' "$PKG3"
   echo "PASS: package carries SARIF validation, attribution, risk signals, and per-unit risk"
 fi
+
+###############################################################################
+echo
+echo "================ scenario 4: agent provenance ================"
+export OCS_PROVIDER=none
+new_repo "$W4"
+ocs init
+ocs start --intent "pair session"
+
+# Human edit -> default checkpoint (actor human, trigger explicit).
+sed -i.bak 's/return 1;/return 5;/' src/a.ts && rm -f src/a.ts.bak
+ocs checkpoint --label "human edit"
+
+# Agent edits -> actor-tagged checkpoint: EXACTLY the command the Claude Code
+# hook fires after Edit/Write tool calls. Touches a.ts too (multi-actor file).
+printf '\nexport const AI_ADDED = true;\n' >> src/a.ts
+printf '\nexport const AI_UTIL = 1;\n' >> src/util.ts
+ocs checkpoint --actor ai:claude-code --label "agent edit"
+ocs log | grep -q "agent  ai:claude-code" || fail "agent checkpoint should carry trigger=agent + actor"
+
+# Trailing human edit after the last checkpoint (final window -> human).
+printf '\n// reviewed\n' >> src/b.ts
+
+echo "== finish (1 unit, clean -> silent) =="
+F4OUT="$(mktemp)"
+ocs finish | tee "$F4OUT"
+if grep -q "judgment" "$F4OUT"; then fail "clean single-unit finish should not interrupt"; fi
+grep -q "provenance: ai:claude-code" "$F4OUT" || fail "plan should summarize provenance"
+
+PKG4="$(ls .ocs/packages/*.json | head -1)"
+node -e '
+const fs = require("fs");
+const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const byActor = Object.fromEntries(p.provenance.map(r => [r.actor, r]));
+const h = byActor["human"], ai = byActor["ai:claude-code"];
+if (!h || !ai) { console.error("expected human + ai provenance records, got " + Object.keys(byActor)); process.exit(1); }
+if (ai.contribution !== "generated") { console.error("ai contribution should be generated"); process.exit(1); }
+for (const want of ["src/a.ts", "src/util.ts"]) if (!ai.paths.includes(want)) { console.error("ai paths missing " + want); process.exit(1); }
+for (const want of ["src/a.ts", "src/b.ts"]) if (!h.paths.includes(want)) { console.error("human paths missing " + want); process.exit(1); }
+if (h.paths.includes("src/util.ts")) { console.error("human should not be credited with the ai-only file"); process.exit(1); }
+const u = p.change_units[0];
+if (JSON.stringify(u.actors) !== JSON.stringify(["ai:claude-code", "human"])) { console.error("unit actors wrong: " + JSON.stringify(u.actors)); process.exit(1); }
+console.log("provenance:", p.provenance.map(r => r.actor + "=" + r.paths.join("+")).join(" | "));
+' "$PKG4"
+echo "PASS: package shows human-vs-AI authorship (multi-actor file carries both)"
+
+echo "== hooks install / idempotency / remove =="
+ocs hooks install claude
+ocs hooks install claude
+node -e '
+const fs = require("fs");
+const s = JSON.parse(fs.readFileSync(".claude/settings.json", "utf8"));
+const entries = (s.hooks && s.hooks.PostToolUse || []).filter(e => JSON.stringify(e).includes("agent-hook"));
+if (entries.length !== 1) { console.error("expected exactly 1 ocs hook entry after double install, got " + entries.length); process.exit(1); }
+const e = entries[0];
+if (!/Edit/.test(e.matcher)) { console.error("bad matcher: " + e.matcher); process.exit(1); }
+if (!e.hooks[0].command.includes("checkpoint --actor ai:claude-code")) { console.error("bad command: " + e.hooks[0].command); process.exit(1); }
+console.log("hook command:", e.hooks[0].command.slice(0, 80) + "...");
+'
+ocs hooks remove claude
+node -e '
+const fs = require("fs");
+const s = JSON.parse(fs.readFileSync(".claude/settings.json", "utf8"));
+const left = JSON.stringify(s).includes("agent-hook");
+if (left) { console.error("ocs hook entry survived removal"); process.exit(1); }
+'
+echo "PASS: hook install is idempotent and removable"
 
 echo
 echo "ALL ACCEPTANCE CHECKS PASSED"

@@ -4,8 +4,9 @@ The first OpenCodeState reference implementation: a **daemonless** CLI that
 proves the loop `init → start → checkpoint → finish → export` end-to-end
 (slice 1), splits a session into logical change units with deterministic
 Tier-0 heuristics (slice 2), attaches codebase-intelligence evidence from
-`fallow` to every package (slice 3), and interrupts the finish only when
-judgment is required (slice 4). No AI in the loop. See
+`fallow` to every package (slice 3), interrupts the finish only when
+judgment is required (slice 4), and records human-vs-AI authorship from
+actor-tagged checkpoints (slice 5). See
 [RFC 0003](../../rfcs/0003-mvp.md), [RFC 0004](../../rfcs/0004-change-grouping.md),
 and [RFC 0005](../../rfcs/0005-codebase-intelligence-providers.md).
 
@@ -92,6 +93,30 @@ Behavior by context:
   required). `ocs finish --yes` approves explicitly.
 - **Dry-run:** reports `would interrupt: …` or `would auto-package (clean)`.
 
+## Agent provenance (slice 5)
+
+Checkpoints are actor-tagged, and attribution falls out of the timeline:
+changes in each checkpoint window belong to the actor who fired that
+checkpoint; the final window (last checkpoint → finish) belongs to whoever
+runs finish. Every net-changed path is covered, and a file touched by both a
+human and an agent honestly carries **both** actors. Packages gain real
+`provenance[]` records (actor, contribution, paths) and each change unit
+lists its `actors`. AI contributions are recorded as `generated`; only actor +
+paths are captured — no prompts, no transcripts (provenance is not
+surveillance; transcript refs are a future opt-in).
+
+To capture agent edits automatically in Claude Code:
+
+```bash
+node src/ocs.ts hooks install claude   # writes a PostToolUse hook into .claude/settings.json
+node src/ocs.ts hooks remove claude
+```
+
+The hook fires `ocs checkpoint --actor ai:claude-code` after every Edit/Write
+tool call (the same pattern fallow's `setup-hooks` uses for its commit gate).
+It swallows all failures — no active session, no workspace — so it never
+blocks the agent, and install/remove are idempotent.
+
 ## How it stores state
 
 - Content is snapshotted into the repo's own git object database via plumbing
@@ -115,7 +140,8 @@ Runs the scripted scenario from the build contract against a throwaway copy of
 
 ## Status
 
-Slices 1–4 of the MVP. Deferred: richer interrupt actions (edit/split/merge
+Slices 1–5 of the MVP. Deferred: richer interrupt actions (edit/split/merge
 units at the prompt), configurable policy (what counts as interrupt-worthy),
-secret scanning, the watcher daemon, agent-hook provenance (MCP), Tier-1
-hunk-splitting, and the eventual Rust port of the hot paths.
+secret scanning, the watcher daemon, an MCP server (agents driving ocs
+directly), opt-in transcript provenance, Tier-1 hunk-splitting, and the
+eventual Rust port of the hot paths.

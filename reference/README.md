@@ -54,6 +54,11 @@ the provider — dogfooding the product.
   silently when clean and pauses (TTY prompt, or exit 3 non-interactively)
   on multiple units, low grouping confidence, or session-introduced issues.
   Inherited debt never interrupts.
-- **Next:** hook-fired agent provenance (`ocs checkpoint --actor ai:<name>`
-  via MCP / Claude Code hooks), richer interrupt actions (edit/split/merge),
-  configurable policy, and the watcher daemon (Phase 2 of RFC 0003).
+- **Slice 5 (done):** agent provenance — checkpoint windows attribute changes
+  to the actor who fired them; packages carry real `provenance[]` (human vs
+  `ai:<name>`, multi-actor files carry both) and per-unit `actors`.
+  `ocs hooks install claude` wires a Claude Code PostToolUse hook that fires
+  `ocs checkpoint --actor ai:claude-code` after agent edits.
+- **Next:** richer interrupt actions (edit/split/merge), configurable policy,
+  an MCP server, opt-in transcript provenance, and the watcher daemon
+  (Phase 2 of RFC 0003).
